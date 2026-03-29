@@ -1,0 +1,7 @@
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# E402: module-level import not at top of file — intentionally suppressed for
+# main.py where sys.stdout/stderr must be reconfigured before other imports.
+per-file-ignores = { "main.py" = ["E402"] }

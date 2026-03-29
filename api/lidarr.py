@@ -1,5 +1,4 @@
 import requests
-import os
 
 from config import LIDARR_URL, LIDARR_API_KEY
 
