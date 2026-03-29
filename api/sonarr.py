@@ -26,6 +26,14 @@ class SonarrAPI:
         response = _session.post(url, json=json_data, params={'apiKey': self.api_key}, timeout=timeout)
         return response
 
+    def _delete(self, path, params=None, timeout=_TIMEOUT):
+        url = f"{self.base_url}{path}"
+        p = {'apiKey': self.api_key}
+        if params:
+            p.update(params)
+        response = _session.delete(url, params=p, timeout=timeout)
+        return response
+
     def get_system_status(self):
         """Gets the system status from Sonarr."""
         try:
@@ -40,6 +48,14 @@ class SonarrAPI:
             return self._get('/api/v3/rootfolder')[0]
         except (requests.exceptions.RequestException, IndexError) as e:
             print(f"Error getting root folder from Sonarr: {e}")
+            return None
+
+    def get_disk_space(self):
+        """Gets disk space info for all mounts from Sonarr."""
+        try:
+            return self._get('/api/v3/diskspace')
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting disk space from Sonarr: {e}")
             return None
 
     def lookup_series(self, term):
@@ -57,6 +73,47 @@ class SonarrAPI:
         except requests.exceptions.RequestException as e:
             print(f"Error getting quality profiles from Sonarr: {e}")
             return None
+
+    def get_library_series(self):
+        """Gets all series in the Sonarr library."""
+        try:
+            return self._get('/api/v3/series', timeout=120)
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting library from Sonarr: {e}")
+            return None
+
+    def get_series_credits(self, series_id):
+        """Gets credits/cast for a specific series."""
+        try:
+            return self._get('/api/v3/credit', params={'seriesId': series_id})
+        except requests.exceptions.RequestException:
+            return []
+
+    def find_series_in_library(self, title):
+        """Find series in the library matching a title (case-insensitive)."""
+        try:
+            series_list = self._get('/api/v3/series', timeout=120)
+            title_lower = title.lower()
+            return [s for s in series_list if title_lower in s.get('title', '').lower()]
+        except requests.exceptions.RequestException as e:
+            print(f"Error finding series in library: {e}")
+            return []
+
+    def delete_series(self, series_id, delete_files=False):
+        """Delete a series from Sonarr. Returns True on success."""
+        try:
+            response = self._delete(
+                f'/api/v3/series/{series_id}',
+                params={
+                    'deleteFiles': str(delete_files).lower(),
+                    'addImportListExclusion': 'false',
+                }
+            )
+            response.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            print(f"Error deleting series from Sonarr: {e}")
+            return False
 
     def add_series(self, series, root_folder_path, quality_profile_id, season_number=None):
         """Adds a series to Sonarr. If season_number is given, only that season is monitored.
@@ -90,3 +147,7 @@ class SonarrAPI:
         except requests.exceptions.RequestException as e:
             print(f"Error adding series to Sonarr: {e}")
             return None, str(e)
+
+
+# Singleton instance
+sonarr = SonarrAPI()
