@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Media Bot – Sign in with Plex</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .login-card {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 48px;
+            text-align: center;
+            box-shadow: 0 8px 32px rgba(0,0,0,.4);
+            max-width: 400px;
+        }
+        .login-card h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+            color: #fff;
+        }
+        .login-card p {
+            color: #8899aa;
+            margin-bottom: 32px;
+        }
+        .plex-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: #e5a00d;
+            color: #000;
+            font-weight: 600;
+            font-size: 16px;
+            padding: 14px 32px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background .2s;
+        }
+        .plex-btn:hover { background: #f5b82e; }
+        .plex-btn svg { width: 24px; height: 24px; }
+        .error { color: #ff6b6b; margin-top: 16px; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h1>Media Bot</h1>
+        <p>Sign in with your Plex account to search and manage your media library.</p>
+        <a href="/auth/start" class="plex-btn">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 0L1.5 6v12L12 24l10.5-6V6L12 0zm0 2.5l8 4.6v9.8l-8 4.6-8-4.6V7.1l8-4.6z"/><path d="M12 7l-5 3v4l5 3 5-3v-4l-5-3z"/></svg>
+            Sign in with Plex
+        </a>
+        {% if error %}
+        <p class="error">{{ error }}</p>
+        {% endif %}
+    </div>
+</body>
+</html>

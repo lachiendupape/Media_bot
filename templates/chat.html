@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Media Bot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        header {
+            background: #16213e;
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #0f3460;
+        }
+        header .info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        header img {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+        }
+        header .username { font-weight: 600; color: #e5a00d; }
+        header a {
+            color: #8899aa;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        header a:hover { color: #e0e0e0; }
+        h1 { font-size: 18px; color: #fff; }
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .msg {
+            max-width: 75%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .msg.user {
+            align-self: flex-end;
+            background: #0f3460;
+            color: #fff;
+        }
+        .msg.bot {
+            align-self: flex-start;
+            background: #16213e;
+            border: 1px solid #0f3460;
+        }
+        .msg.bot.error {
+            border-color: #ff6b6b;
+            color: #ff6b6b;
+        }
+        .input-area {
+            padding: 16px 24px;
+            background: #16213e;
+            border-top: 1px solid #0f3460;
+            display: flex;
+            gap: 12px;
+        }
+        #msgInput {
+            flex: 1;
+            padding: 12px 16px;
+            border-radius: 8px;
+            border: 1px solid #0f3460;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-size: 15px;
+            outline: none;
+        }
+        #msgInput:focus { border-color: #e5a00d; }
+        #sendBtn {
+            padding: 12px 24px;
+            background: #e5a00d;
+            color: #000;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 15px;
+        }
+        #sendBtn:hover { background: #f5b82e; }
+        #sendBtn:disabled { opacity: .5; cursor: not-allowed; }
+        .typing {
+            align-self: flex-start;
+            color: #8899aa;
+            font-style: italic;
+            padding: 8px 16px;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Media Bot</h1>
+        <div class="info">
+            {% if user.thumb %}<img src="{{ user.thumb }}" alt="">{% endif %}
+            <span class="username">{{ user.username }}</span>
+            <a href="/auth/logout">Sign out</a>
+        </div>
+    </header>
+    <div class="chat-area" id="chatArea">
+        <div class="msg bot">Hi {{ user.username }}! Ask me to search your library, add movies or TV shows, or look up what's available by actor. What can I help with?</div>
+    </div>
+    <div class="input-area">
+        <input type="text" id="msgInput" placeholder="e.g. Add the movie Sinners to Radarr..." autocomplete="off">
+        <button id="sendBtn">Send</button>
+    </div>
+    <script>
+        const chatArea = document.getElementById('chatArea');
+        const input = document.getElementById('msgInput');
+        const btn = document.getElementById('sendBtn');
+
+        function addMsg(text, cls) {
+            const el = document.createElement('div');
+            el.className = 'msg ' + cls;
+            el.textContent = text;
+            chatArea.appendChild(el);
+            chatArea.scrollTop = chatArea.scrollHeight;
+            return el;
+        }
+
+        async function send() {
+            const text = input.value.trim();
+            if (!text) return;
+            input.value = '';
+            addMsg(text, 'user');
+            btn.disabled = true;
+
+            const typing = document.createElement('div');
+            typing.className = 'typing';
+            typing.textContent = 'Thinking...';
+            chatArea.appendChild(typing);
+            chatArea.scrollTop = chatArea.scrollHeight;
+
+            try {
+                const res = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({message: text}),
+                });
+                typing.remove();
+                const data = await res.json();
+                if (res.status === 401) {
+                    window.location.href = '/auth/login';
+                    return;
+                }
+                if (data.error) {
+                    addMsg('Error: ' + data.error, 'bot error');
+                } else {
+                    addMsg(data.response, 'bot');
+                }
+            } catch (e) {
+                typing.remove();
+                addMsg('Connection error. Please try again.', 'bot error');
+            }
+            btn.disabled = false;
+            input.focus();
+        }
+
+        btn.addEventListener('click', send);
+        input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+        input.focus();
+    </script>
+</body>
+</html>
