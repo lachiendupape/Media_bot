@@ -40,3 +40,9 @@ _*.txt
 
 # SQLite cache
 credit_cache.db
+
+# Sensitive / non-code files
+*.csv
+Agent2.md
+gemini_chat.md
+TODO.md
