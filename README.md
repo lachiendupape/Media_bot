@@ -61,7 +61,7 @@ At minimum you need to set:
 
 | Variable | Description |
 |----------|-------------|
-| `RADARR_URL` | Radarr base URL (e.g. `http://192.168.1.101:7878/radarr`) |
+| `RADARR_URL` | Radarr base URL (e.g. `http://YOUR_SERVER_IP:7878/radarr`) |
 | `RADARR_API_KEY` | Radarr API key (Settings > General in Radarr) |
 | `SONARR_URL` | Sonarr base URL |
 | `SONARR_API_KEY` | Sonarr API key |
