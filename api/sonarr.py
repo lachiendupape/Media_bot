@@ -1,5 +1,4 @@
 import requests
-import os
 
 from config import SONARR_URL, SONARR_API_KEY
 

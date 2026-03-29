@@ -152,6 +152,18 @@ Media_bot/
 
 If you expose Media Bot through Nginx or similar, set `FLASK_ENV=production` in your `.env` to enable the `Secure` flag on session cookies. The app reads `request.url_root` to build OAuth callback URLs, so it works automatically behind a proxy that sets `X-Forwarded-Proto`.
 
+## Continuous Integration
+
+No compilation step is required — Python is an interpreted language, so there is nothing to compile on the host before running the bot.
+
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs automatically on every push and pull request. It:
+
+1. **Installs dependencies** — `pip install -r requirements.txt` verifies the dependency tree resolves correctly.
+2. **Lints with ruff** — catches style issues and unused imports.
+3. **Checks syntax** — `python -m compileall` confirms every `.py` file parses without errors.
+
+No secrets or service credentials are needed for CI; it only checks the Python source.
+
 ## License
 
 This project is for personal use.
