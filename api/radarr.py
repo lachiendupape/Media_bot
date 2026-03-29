@@ -33,6 +33,14 @@ class RadarrAPI:
         response = _session.post(url, json=json_data, params={'apiKey': self.api_key}, timeout=timeout)
         return response
 
+    def _delete(self, path, params=None, timeout=_TIMEOUT):
+        url = f"{self.base_url}{path}"
+        p = {'apiKey': self.api_key}
+        if params:
+            p.update(params)
+        response = _session.delete(url, params=p, timeout=timeout)
+        return response
+
     def get_system_status(self):
         """Gets the system status from Radarr."""
         try:
@@ -47,6 +55,14 @@ class RadarrAPI:
             return self._get('/api/v3/rootfolder')[0]
         except (requests.exceptions.RequestException, IndexError) as e:
             print(f"Error getting root folder from Radarr: {e}")
+            return None
+
+    def get_disk_space(self):
+        """Gets disk space info for all mounts from Radarr."""
+        try:
+            return self._get('/api/v3/diskspace')
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting disk space from Radarr: {e}")
             return None
 
     def lookup_movie(self, term):
@@ -78,7 +94,34 @@ class RadarrAPI:
         try:
             return self._get('/api/v3/credit', params={'movieId': movie_id})
         except requests.exceptions.RequestException as e:
+            print(f"Warning: could not fetch credits for movie {movie_id}: {e}", flush=True)
             return []
+
+    def find_movie_in_library(self, title):
+        """Find movies in the library matching a title (case-insensitive)."""
+        try:
+            movies = self._get('/api/v3/movie', timeout=120)
+            title_lower = title.lower()
+            return [m for m in movies if title_lower in m.get('title', '').lower()]
+        except requests.exceptions.RequestException as e:
+            print(f"Error finding movie in library: {e}")
+            return []
+
+    def delete_movie(self, movie_id, delete_files=False):
+        """Delete a movie from Radarr. Returns True on success."""
+        try:
+            response = self._delete(
+                f'/api/v3/movie/{movie_id}',
+                params={
+                    'deleteFiles': str(delete_files).lower(),
+                    'addImportExclusion': 'false',
+                }
+            )
+            response.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            print(f"Error deleting movie from Radarr: {e}")
+            return False
 
     def add_movie(self, movie, root_folder_path, quality_profile_id):
         """Adds a movie to Radarr. Returns (result_dict, None) on success,
@@ -108,7 +151,7 @@ class RadarrAPI:
 
 
 class RadarrCreditCache:
-    """SQLite-backed cache of actor->movie mappings. Persists across restarts."""
+    """SQLite-backed cache of person->media mappings. Covers movie/TV actors and directors."""
 
     def __init__(self, db_path=_DB_PATH):
         self.db_path = os.path.abspath(db_path)
@@ -118,14 +161,28 @@ class RadarrCreditCache:
 
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute('''CREATE TABLE IF NOT EXISTS credits (
-                actor TEXT NOT NULL,
-                title TEXT NOT NULL,
-                year INTEGER,
-                character TEXT,
-                has_file INTEGER
-            )''')
-            conn.execute('CREATE INDEX IF NOT EXISTS idx_actor ON credits(actor)')
+            # Detect old schema (actor column) and recreate with new schema
+            existing_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(credits)").fetchall()
+            }
+            if existing_cols and 'person_name' not in existing_cols:
+                # Old schema detected (uses 'actor' column). Drop and recreate.
+                # The cache is fully rebuild-able, so losing old rows is intentional.
+                conn.execute('DROP TABLE IF EXISTS credits')
+                existing_cols = set()
+            if not existing_cols:
+                conn.execute('''CREATE TABLE credits (
+                    person_name TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    year INTEGER,
+                    character TEXT,
+                    has_file INTEGER,
+                    media_type TEXT NOT NULL DEFAULT 'movie',
+                    role TEXT NOT NULL DEFAULT 'actor'
+                )''')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_person ON credits(person_name)')
+            conn.execute('CREATE INDEX IF NOT EXISTS idx_media_type ON credits(media_type)')
             conn.execute('''CREATE TABLE IF NOT EXISTS cache_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT
@@ -146,76 +203,154 @@ class RadarrCreditCache:
             return time.time() - float(row[0])
 
     def build(self):
-        """Build the credit cache from Radarr API. Call from a background thread."""
+        """Build the credit cache from Radarr and Sonarr APIs. Call from a background thread."""
         if self._building:
             return
         with self._lock:
             self._building = True
-        print("[CreditCache] Building actor cache...", flush=True)
+        print("[CreditCache] Building credit cache (movies + TV)...", flush=True)
         try:
             radarr = RadarrAPI()
-            movies = radarr.get_library_movies()
-            if not movies:
-                print("[CreditCache] Failed to fetch library.", flush=True)
-                return
+            # Lazy import to avoid circular dependency at module level
+            from api.sonarr import SonarrAPI
+            sonarr = SonarrAPI()
 
             rows = []
-            for i, movie in enumerate(movies):
-                if (i + 1) % 50 == 0:
-                    print(f"[CreditCache] Progress: {i+1}/{len(movies)}", flush=True)
-                credits = radarr.get_movie_credits(movie['id'])
-                for c in credits:
-                    if c.get('type') != 'cast':
-                        continue
-                    name = c.get('personName', '').lower().strip()
-                    if not name:
-                        continue
-                    rows.append((
-                        name,
-                        movie.get('title', '?'),
-                        movie.get('year'),
-                        c.get('character', '?'),
-                        1 if movie.get('hasFile', False) else 0,
-                    ))
 
+            # --- Movies (actors + directors) ---
+            movies = radarr.get_library_movies()
+            if movies:
+                for i, movie in enumerate(movies):
+                    if (i + 1) % 50 == 0:
+                        print(f"[CreditCache] Movies: {i+1}/{len(movies)}", flush=True)
+                    has_file = 1 if movie.get('hasFile', False) else 0
+                    for c in radarr.get_movie_credits(movie['id']):
+                        credit_type = c.get('type', '').lower()
+                        name = c.get('personName', '').lower().strip()
+                        if not name:
+                            continue
+                        if credit_type == 'cast':
+                            rows.append((
+                                name,
+                                movie.get('title', '?'),
+                                movie.get('year'),
+                                c.get('character', '?'),
+                                has_file,
+                                'movie',
+                                'actor',
+                            ))
+                        elif credit_type == 'crew' and c.get('job', '').lower() == 'director':
+                            rows.append((
+                                name,
+                                movie.get('title', '?'),
+                                movie.get('year'),
+                                'Director',
+                                has_file,
+                                'movie',
+                                'director',
+                            ))
+                print(f"[CreditCache] Movies done: {len(movies)} titles.", flush=True)
+            else:
+                print("[CreditCache] No movies fetched from Radarr.", flush=True)
+
+            # --- TV series (actors + directors) ---
+            series_list = sonarr.get_library_series()
+            if series_list:
+                for i, series in enumerate(series_list):
+                    if (i + 1) % 50 == 0:
+                        print(f"[CreditCache] TV series: {i+1}/{len(series_list)}", flush=True)
+                    stats = series.get('statistics', {})
+                    has_file = 1 if stats.get('episodeFileCount', 0) > 0 else 0
+                    for c in sonarr.get_series_credits(series['id']):
+                        credit_type = c.get('type', '').lower()
+                        name = c.get('personName', '').lower().strip()
+                        if not name:
+                            continue
+                        if credit_type == 'cast':
+                            rows.append((
+                                name,
+                                series.get('title', '?'),
+                                series.get('year'),
+                                c.get('character', '?'),
+                                has_file,
+                                'tv',
+                                'actor',
+                            ))
+                        elif credit_type == 'crew' and c.get('job', '').lower() == 'director':
+                            rows.append((
+                                name,
+                                series.get('title', '?'),
+                                series.get('year'),
+                                'Director',
+                                has_file,
+                                'tv',
+                                'director',
+                            ))
+                print(f"[CreditCache] TV series done: {len(series_list)} titles.", flush=True)
+            else:
+                print("[CreditCache] No TV series fetched from Sonarr.", flush=True)
+
+            total_media = (len(movies) if movies else 0) + (len(series_list) if series_list else 0)
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute('DELETE FROM credits')
-                conn.executemany('INSERT INTO credits VALUES (?,?,?,?,?)', rows)
+                conn.executemany('INSERT INTO credits VALUES (?,?,?,?,?,?,?)', rows)
                 conn.execute("INSERT OR REPLACE INTO cache_meta VALUES ('last_built', ?)",
                              (str(time.time()),))
                 conn.execute("INSERT OR REPLACE INTO cache_meta VALUES ('movie_count', ?)",
-                             (str(len(movies)),))
+                             (str(total_media),))
 
-            print(f"[CreditCache] Ready: {len(rows)} credits from {len(movies)} movies.", flush=True)
+            print(f"[CreditCache] Ready: {len(rows)} credits from {total_media} titles.", flush=True)
         except Exception as e:
             print(f"[CreditCache] Error building cache: {e}", flush=True)
         finally:
             with self._lock:
                 self._building = False
 
-    def search(self, actor_name):
-        """Search for movies by actor name. Returns list of dicts."""
+    def search(self, person_name, media_type=None, role=None):
+        """Search for titles by person name. Returns list of dicts.
+
+        Args:
+            person_name: Actor or director name to search.
+            media_type: 'movie', 'tv', or None for all.
+            role: 'actor', 'director', or None for all.
+        """
         if not self.ready:
             return None
-        query = actor_name.lower().strip()
+        query = person_name.lower().strip()
+
+        conditions = ['person_name = ?']
+        params = [query]
+        if media_type:
+            conditions.append('media_type = ?')
+            params.append(media_type)
+        if role:
+            conditions.append('role = ?')
+            params.append(role)
+        where = ' AND '.join(conditions)
+
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
-            # Exact match first
             rows = conn.execute(
-                'SELECT * FROM credits WHERE actor = ? ORDER BY year DESC', (query,)
+                f'SELECT * FROM credits WHERE {where} ORDER BY year DESC', params
             ).fetchall()
-            # Fall back to partial match
+
+            # Fall back to partial match if exact match found nothing
             if not rows:
+                conditions[0] = 'person_name LIKE ?'
+                params[0] = f'%{query}%'
+                where = ' AND '.join(conditions)
                 rows = conn.execute(
-                    'SELECT * FROM credits WHERE actor LIKE ? ORDER BY year DESC',
-                    (f'%{query}%',)
+                    f'SELECT * FROM credits WHERE {where} ORDER BY year DESC', params
                 ).fetchall()
+
             return [
                 {
                     'title': r['title'],
                     'year': r['year'],
                     'character': r['character'],
                     'hasFile': bool(r['has_file']),
+                    'media_type': r['media_type'],
+                    'role': r['role'],
                 }
                 for r in rows
             ]
@@ -223,3 +358,4 @@ class RadarrCreditCache:
 
 # Singleton cache instance
 credit_cache = RadarrCreditCache()
+
