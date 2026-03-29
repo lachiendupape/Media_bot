@@ -1,4 +1,4 @@
-python-dotenv
-requests
-flask
-openai
+python-dotenv>=1.2,<2
+requests>=2.32,<3
+flask>=3.1,<4
+openai>=2.30,<3

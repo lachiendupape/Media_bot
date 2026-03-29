@@ -28,3 +28,8 @@ PLEX_APP_NAME = os.getenv("PLEX_APP_NAME", "Media Bot")
 
 # Flask
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
+if not FLASK_SECRET_KEY or len(FLASK_SECRET_KEY) < 16:
+    raise RuntimeError(
+        "FLASK_SECRET_KEY must be set in .env and be at least 16 characters. "
+        "Generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+    )

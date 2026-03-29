@@ -3,19 +3,29 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 import os
+import logging
 import threading
 import hmac
+from datetime import timedelta
 from functools import wraps
 from flask import Flask, request, jsonify, session, redirect, url_for, render_template
-from dotenv import load_dotenv
 from llm import chat_with_llm
 from api.radarr import credit_cache
 import plex_auth
 from config import FLASK_SECRET_KEY
 
-load_dotenv()
+log = logging.getLogger(__name__)
+
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=timedelta(days=14),
+)
+# Set Secure flag when served behind HTTPS proxy
+if os.getenv('FLASK_ENV') == 'production':
+    app.config['SESSION_COOKIE_SECURE'] = True
 
 BOT_API_KEY = os.getenv('BOT_API_KEY')
 
@@ -106,16 +116,17 @@ def chat():
         return jsonify({"error": "No message provided. Payload must be JSON with a 'message' key."}), 400
     
     user_message = data['message']
+    if not isinstance(user_message, str) or len(user_message) > 1000:
+        return jsonify({"error": "Message must be a string of 1000 characters or fewer."}), 400
+
     try:
-        print(f"Received message: {user_message}", flush=True)
+        log.info("Received message: %s", user_message)
         response_text = chat_with_llm(user_message)
-        print(f"Bot response: {response_text[:200]}", flush=True)
+        log.info("Bot response: %s", response_text[:200])
         return jsonify({"response": response_text})
-    except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        print(f"Endpoint Error Traceback: {error_trace}")
-        return jsonify({"error": error_trace}), 500
+    except Exception:
+        log.exception("Error processing chat request")
+        return jsonify({"error": "Something went wrong. Please try again."}), 500
 
 @app.route('/health', methods=['GET'])
 def health():

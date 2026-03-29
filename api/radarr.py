@@ -1,11 +1,8 @@
 import requests
-import sys
 import os
 import sqlite3
 import threading
 import time
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from config import RADARR_URL, RADARR_API_KEY
 
