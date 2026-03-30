@@ -760,19 +760,23 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
     # --- Title credit lookups (who directed/starred in a specific title) ---
     director_match = re.match(r'^who\s+directed\s+(.+)$', lowered, flags=re.IGNORECASE)
     if director_match:
-        title = _normalize_title_phrase(director_match.group(1))
+        raw_phrase = director_match.group(1)
+        title = _normalize_title_phrase(raw_phrase)
         if title:
             if telemetry is not None:
                 telemetry['heuristic_route'] = 'search_title_credits:director'
-            return search_title_credits_handler(title, role='director', state=state)
+            media_type = _infer_media_type_from_query(raw_phrase)
+            return search_title_credits_handler(title, role='director', state=state, media_type=media_type)
 
     actor_match = re.match(r'^who\s+(?:starred|stars|acted|acts|is)\s+in\s+(.+)$', lowered, flags=re.IGNORECASE)
     if actor_match:
-        title = _normalize_title_phrase(actor_match.group(1))
+        raw_phrase = actor_match.group(1)
+        title = _normalize_title_phrase(raw_phrase)
         if title:
             if telemetry is not None:
                 telemetry['heuristic_route'] = 'search_title_credits:actor'
-            return search_title_credits_handler(title, role='actor', state=state)
+            media_type = _infer_media_type_from_query(raw_phrase)
+            return search_title_credits_handler(title, role='actor', state=state, media_type=media_type)
 
     # --- Person filmography lookups (what does X star in / list all Xs) ---
     # Use separate non-greedy patterns so the name doesn't swallow the trailing verb.
