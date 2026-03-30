@@ -3,10 +3,42 @@ param(
     [string]$Profile = "prod",
 
     [switch]$SkipZap,
-    [switch]$SkipNuclei
+    [switch]$SkipNuclei,
+
+    # When set, skips the LAN detection warning.
+    # NOTE: Scans run from inside 192.168.x.x bypass reverse-proxy IP
+    # restrictions and will NOT reflect what an internet attacker sees.
+    # For true external testing, trigger the GitHub Actions workflow:
+    #   gh workflow run security.yml -f profile=prod
+    [switch]$IgnoreLanWarning
 )
 
 $ErrorActionPreference = "Stop"
+
+# Warn if running from a private/LAN IP (results will bypass internet ACLs)
+if (-not $IgnoreLanWarning) {
+    $localIPs = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue).IPAddress
+    $isLan = $localIPs | Where-Object {
+        $_ -match '^192\.168\.' -or $_ -match '^10\.' -or $_ -match '^172\.(1[6-9]|2[0-9]|3[01])\.'
+    }
+    if ($isLan) {
+        Write-Warning @"
+This machine has a private/LAN IP ($($isLan -join ', ')).
+Scans run from inside the home network bypass reverse-proxy IP restrictions,
+so services protected by 'allow 192.168.0.0/16 only' rules will appear
+accessible even though they are not reachable from the internet.
+
+For a true EXTERNAL perspective, trigger the GitHub Actions workflow:
+  gh workflow run security.yml -f profile=prod
+
+To suppress this warning and continue the local scan anyway:
+  .\run-baseline.ps1 -IgnoreLanWarning
+
+"@
+        exit 1
+    }
+}
+
 
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $root
@@ -19,6 +51,39 @@ $nucleiDir = Join-Path $runDir "nuclei"
 
 New-Item -ItemType Directory -Force -Path $zapDir | Out-Null
 New-Item -ItemType Directory -Force -Path $nucleiDir | Out-Null
+
+function Get-NucleiRunner {
+    $native = Get-Command nuclei -ErrorAction SilentlyContinue
+    if ($native) {
+        return "native"
+    }
+    return "docker"
+}
+
+function Invoke-NucleiScan {
+    param(
+        [string]$TargetUrl,
+        [string]$OutputFile,
+        [string]$Runner,
+        [string]$OutputDir
+    )
+
+    if ($Runner -eq "native") {
+        nuclei -u "$TargetUrl" -severity low,medium,high,critical -no-color -o "$OutputFile"
+        return
+    }
+
+    $outDirResolved = (Resolve-Path $OutputDir).Path
+    $outFileName = Split-Path -Leaf $OutputFile
+
+    docker run --rm `
+        -v "${outDirResolved}:/work" `
+        projectdiscovery/nuclei:latest `
+        -u "$TargetUrl" `
+        -severity low,medium,high,critical `
+        -no-color `
+        -o "/work/$outFileName"
+}
 
 function Get-TargetsFromFile {
     param([string]$Path)
@@ -91,12 +156,15 @@ else {
 }
 
 if (-not $SkipNuclei) {
+    $nucleiRunner = Get-NucleiRunner
+    Write-Host "[Nuclei] Runner: $nucleiRunner"
+
     foreach ($url in $targets) {
         $safeName = ($url -replace '^https?://', '') -replace '[^a-zA-Z0-9._-]', '_'
         $txtOut = Join-Path $nucleiDir "$safeName-nuclei.txt"
 
         Write-Host "[Nuclei] Scanning $url"
-        nuclei -u "$url" -severity low,medium,high,critical -o "$txtOut"
+        Invoke-NucleiScan -TargetUrl $url -OutputFile $txtOut -Runner $nucleiRunner -OutputDir $nucleiDir
     }
 }
 else {
