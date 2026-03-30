@@ -374,7 +374,7 @@ def chat_with_llm(user_message: str, user_info: dict = None) -> str:
 
     try:
         response = client.chat.completions.create(
-            model="qwen2.5:7b", 
+            model="qwen2.5:14b", 
             messages=messages,
             tools=tools
         )
