@@ -8,12 +8,11 @@ import config
 # Minimum free disk space percentage before blocking new downloads
 _DISK_FREE_THRESHOLD = 0.05  # 5%
 
-# Initialize OpenAI client pointed to local NeMo Claw inference API
-# You can change this base_url if NeMo Claw is exposed on a different path.
+# Initialize OpenAI client pointed at Ollama
 try:
     client = OpenAI(
-        base_url="http://127.0.0.1:11434/v1",
-        api_key="ollama" # Some valid string is required by the SDK
+        base_url=f"{config.OLLAMA_BASE_URL}/v1",
+        api_key="ollama"
     )
 except Exception as e:
     print(f"Failed to initialize OpenAI client: {e}")
@@ -374,7 +373,7 @@ def chat_with_llm(user_message: str, user_info: dict = None) -> str:
 
     try:
         response = client.chat.completions.create(
-            model="qwen2.5:14b", 
+            model=config.OLLAMA_MODEL, 
             messages=messages,
             tools=tools
         )

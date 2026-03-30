@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.env.bak
+credit_cache.db
+_*.py
+_*.txt
+.git/
+.gitignore
+.vscode/
+*.md
+LICENSE

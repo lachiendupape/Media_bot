@@ -16,9 +16,9 @@ A natural-language media library assistant that lets you search and manage your 
 ```
 Browser / API client
         |
-   Flask (port 5000)
+   Flask (port 5000) [Docker container]
         |
-   Ollama (qwen2.5:7b, port 11434)
+   Ollama (qwen2.5:14b, port 11434) [host]
         |
    Tool handlers
     /    |    \
@@ -29,10 +29,10 @@ The LLM decides which tool to call based on the user's message. Tool handlers ca
 
 ## Prerequisites
 
-- Python 3.10+
-- [Ollama](https://ollama.com/) running locally with the `qwen2.5:7b` model pulled
+- [Ollama](https://ollama.com/) running locally with the `qwen2.5:14b` model pulled
 - Radarr and Sonarr instances accessible on your network
 - A Plex server (for OAuth authentication)
+- Docker and Docker Compose (recommended), or Python 3.10+
 
 ## Getting Started
 
@@ -86,10 +86,20 @@ curl -s http://YOUR_PLEX_IP:32400/identity | grep machineIdentifier
 ### 4. Pull the Ollama model
 
 ```bash
-ollama pull qwen2.5:7b
+ollama pull qwen2.5:14b
 ```
 
 ### 5. Start the server
+
+**With Docker (recommended):**
+
+```bash
+docker compose up -d
+```
+
+This builds the image, starts the container, and connects to Ollama on your host machine. The credit cache is persisted in a Docker volume.
+
+**Without Docker:**
 
 ```bash
 python main.py
@@ -137,6 +147,8 @@ Media_bot/
   llm.py             -- LLM integration, tool schemas, handlers
   plex_auth.py       -- Plex OAuth PIN-based authentication
   config.py          -- Environment variable loading and validation
+  Dockerfile         -- Container image definition
+  docker-compose.yml -- Container orchestration
   api/
     radarr.py        -- Radarr API wrapper and SQLite credit cache
     sonarr.py        -- Sonarr API wrapper

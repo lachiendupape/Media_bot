@@ -10,8 +10,9 @@ from config import RADARR_URL, RADARR_API_KEY
 _session = requests.Session()
 _TIMEOUT = 30
 
-# SQLite DB path (next to this file)
-_DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'credit_cache.db')
+# SQLite DB path — uses DATA_DIR env var (for Docker volume) or project root
+_DATA_DIR = os.environ.get('DATA_DIR', os.path.join(os.path.dirname(__file__), '..'))
+_DB_PATH = os.path.join(_DATA_DIR, 'credit_cache.db')
 
 
 class RadarrAPI:

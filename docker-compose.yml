@@ -1,0 +1,25 @@
+services:
+  media-bot:
+    build: .
+    container_name: media-bot
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - DATA_DIR=/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - cache-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health', timeout=5).raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  cache-data:

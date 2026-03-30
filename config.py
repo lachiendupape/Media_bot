@@ -26,6 +26,10 @@ PLEX_MACHINE_ID = os.getenv("PLEX_MACHINE_ID")
 PLEX_CLIENT_ID = os.getenv("PLEX_CLIENT_ID")
 PLEX_APP_NAME = os.getenv("PLEX_APP_NAME", "Media Bot")
 
+# Ollama
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+
 # Owner account — only this Plex username may delete media
 OWNER_PLEX_USERNAME = os.getenv("OWNER_PLEX_USERNAME", "")
 
