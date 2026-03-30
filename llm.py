@@ -428,15 +428,22 @@ def _format_title_credits_results(results, title: str = None, role: str = None, 
 
         if role in (None, 'director'):
             if directors:
-                lines.append("Directors: " + ", ".join(d.title() for d in directors))
+                if len(directors) == 1:
+                    lines.append(f"Director: {directors[0]}")
+                else:
+                    lines.append("Directors:")
+                    for d in directors:
+                        lines.append(f"- {d}")
             else:
-                lines.append("Directors: none found")
+                lines.append("Director: none found")
 
         if role in (None, 'actor'):
             if actors:
-                lines.append("Cast: " + ", ".join(a.title() for a in actors[:20]))
-                if len(actors) > 20:
-                    lines.append(f"...and {len(actors) - 20} more")
+                lines.append("Cast:")
+                for actor in actors[:12]:
+                    lines.append(f"- {actor}")
+                if len(actors) > 12:
+                    lines.append(f"- ...and {len(actors) - 12} more")
             else:
                 lines.append("Cast: none found")
 
