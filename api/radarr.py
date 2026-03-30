@@ -1,5 +1,6 @@
-import requests
+import difflib
 import os
+import requests
 import sqlite3
 import threading
 import time
@@ -380,6 +381,30 @@ class RadarrCreditCache:
                     f'SELECT * FROM credits WHERE {where} ORDER BY year DESC', params
                 ).fetchall()
 
+            # Fall back to fuzzy name match (handles minor typos/variations)
+            if not rows:
+                extra_conditions = []
+                extra_params = []
+                if media_type:
+                    extra_conditions.append('media_type = ?')
+                    extra_params.append(media_type)
+                if role:
+                    extra_conditions.append('role = ?')
+                    extra_params.append(role)
+                where_extra = (' AND ' + ' AND '.join(extra_conditions)) if extra_conditions else ''
+                name_rows = conn.execute(
+                    f'SELECT DISTINCT person_name FROM credits WHERE 1=1{where_extra}', extra_params
+                ).fetchall()
+                all_names = [r[0] for r in name_rows]
+                close_matches = difflib.get_close_matches(query, all_names, n=5, cutoff=0.6)
+                if close_matches:
+                    placeholders = ','.join('?' * len(close_matches))
+                    rows = conn.execute(
+                        f'SELECT * FROM credits WHERE person_name IN ({placeholders}){where_extra}'
+                        f' ORDER BY year DESC',
+                        close_matches + extra_params,
+                    ).fetchall()
+
             return [
                 {
                     'title': r['title'],
@@ -429,6 +454,30 @@ class RadarrCreditCache:
                 rows = conn.execute(
                     f'SELECT * FROM credits WHERE {where} ORDER BY year DESC, role, person_name', params
                 ).fetchall()
+
+            # Fall back to fuzzy title match (handles punctuation differences like colons)
+            if not rows:
+                extra_conditions = []
+                extra_params = []
+                if media_type:
+                    extra_conditions.append('media_type = ?')
+                    extra_params.append(media_type)
+                if role:
+                    extra_conditions.append('role = ?')
+                    extra_params.append(role)
+                where_extra = (' AND ' + ' AND '.join(extra_conditions)) if extra_conditions else ''
+                title_rows = conn.execute(
+                    f'SELECT DISTINCT lower(title) FROM credits WHERE 1=1{where_extra}', extra_params
+                ).fetchall()
+                all_titles = [r[0] for r in title_rows]
+                close_matches = difflib.get_close_matches(query, all_titles, n=5, cutoff=0.6)
+                if close_matches:
+                    placeholders = ','.join('?' * len(close_matches))
+                    rows = conn.execute(
+                        f'SELECT * FROM credits WHERE lower(title) IN ({placeholders}){where_extra}'
+                        f' ORDER BY year DESC, role, person_name',
+                        close_matches + extra_params,
+                    ).fetchall()
 
             return [
                 {
