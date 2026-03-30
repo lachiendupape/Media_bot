@@ -13,7 +13,7 @@ from collections import OrderedDict
 from datetime import timedelta
 from functools import wraps
 import requests
-from flask import Flask, g, request, jsonify, session, redirect, url_for, render_template
+from flask import Flask, Response, g, request, jsonify, session, redirect, url_for, render_template
 from llm import chat_with_llm
 from api.radarr import credit_cache
 import plex_auth
@@ -211,6 +211,25 @@ def finalize_request(response):
     request_id = getattr(g, 'request_id', '-')
     response.headers['X-Request-ID'] = request_id
 
+    # Security headers
+    csp = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https://plex.tv https://*.plex.tv; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; "
+        "object-src 'none';"
+    )
+    response.headers['Content-Security-Policy'] = csp
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
+    response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
+    response.headers['Cross-Origin-Resource-Policy'] = 'same-origin'
+    if os.getenv('FLASK_ENV') == 'production':
+        response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+
     duration_ms = None
     if hasattr(g, 'request_started'):
         duration_ms = round((time.perf_counter() - g.request_started) * 1000, 2)
@@ -264,7 +283,9 @@ def auth_start():
     session['plex_pin_id'] = pin_id
     forward_url = request.url_root.rstrip('/') + url_for('auth_callback')
     auth_url = plex_auth.build_auth_url(pin_code, forward_url)
-    return redirect(auth_url)
+    resp = Response(status=302)
+    resp.headers['Location'] = auth_url
+    return resp
 
 
 @app.route('/auth/callback')
