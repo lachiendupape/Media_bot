@@ -213,7 +213,7 @@ falls back to a local Docker build using the same target image tag.
 
 ## Project Structure
 
-`365``
+```
 Media_bot/
   main.py            -- Flask server, routes, authentication
   llm.py             -- LLM integration, tool schemas, handlers
@@ -249,7 +249,7 @@ Media_bot/
 
 ## Deployment Behind a Reverse Proxy
 
-If you expose Media Bot through Nginx or similar, set `FLASK_ENV=production` in your `.env` to enable the `Secure` flag on session cookies. The app reads `request.url_root` to build OAuth callback URLs, so it works automatically behind a proxy that sets `X-Forwarded-Proto`.
+If you expose Media Bot through Nginx or similar, run it with `FLASK_ENV=production` so session cookies use the `Secure` flag. The production compose file already sets this for you. The app reads `request.url_root` to build OAuth callback URLs, so it works automatically behind a proxy that sets `X-Forwarded-Proto`.
 
 ## Continuous Integration
 
@@ -307,8 +307,15 @@ Copy-Item scripts/security/targets-dev.example.txt scripts/security/targets-dev.
 
 Requirements:
 
-- Docker (for OWASP ZAP baseline)
-- Nuclei CLI on your machine (`nuclei` in PATH)
+- Docker
+- Nuclei CLI is optional. If `nuclei` is not installed locally, the script falls back to `projectdiscovery/nuclei:latest` in Docker.
+
+Important:
+
+- Running the local scanner from a private/LAN IP can bypass reverse-proxy allowlists and produce misleading results for internet-facing security checks.
+- The script will warn and stop by default on LAN/private networks.
+- For a true external perspective, trigger the GitHub Actions security workflow instead.
+- Use `-IgnoreLanWarning` only when you intentionally want an internal-network scan.
 
 Run production profile:
 
@@ -328,7 +335,14 @@ Run both profiles:
 ./scripts/security/run-baseline.ps1 -Profile both
 ```
 
+Bypass the LAN warning intentionally:
+
+```powershell
+./scripts/security/run-baseline.ps1 -Profile prod -IgnoreLanWarning
+```
+
 Reports are written under `security-reports/<timestamp>/`.
+These reports are local-only and gitignored.
 
 ### 2) CI security job (Nuclei + Trivy)
 
@@ -338,6 +352,12 @@ The `Security Scans` workflow runs:
 - Nuclei web scan against selected target profile
 
 Trigger manually from GitHub Actions with profile `prod`, `dev`, or `both`.
+
+Workflow outputs are uploaded as GitHub Actions artifacts, not committed into the repository:
+
+- Trivy SARIF is uploaded to GitHub code scanning and also stored as a workflow artifact.
+- Nuclei output is uploaded as a workflow artifact.
+- Security artifacts currently retain for 14 days.
 
 ### 3) Weekly scheduled scan profile
 
