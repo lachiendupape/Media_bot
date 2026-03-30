@@ -334,8 +334,11 @@ def auth_callback():
     if not user:
         return redirect(url_for('login_page', error='Could not retrieve Plex user info.'))
 
-    if not plex_auth.user_has_server_access(token):
+    has_access, is_owner = plex_auth.user_has_server_access(token)
+    if not has_access:
         return redirect(url_for('login_page', error='Your Plex account does not have access to this server.'))
+
+    user['is_owner'] = is_owner
 
     session['plex_user'] = user
     session.permanent = True

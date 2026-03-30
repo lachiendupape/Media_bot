@@ -198,13 +198,19 @@ def _check_disk_space():
 
 
 def _is_owner(user_info):
-    """Return True if user_info belongs to the configured server owner."""
-    owner = config.OWNER_PLEX_USERNAME.strip().lower()
-    if not owner:
-        return False
+    """Return True if user_info belongs to the configured server owner.
+
+    Ownership is determined in order:
+    1. If OWNER_PLEX_USERNAME is configured, compare it to the authenticated username.
+    2. Otherwise, fall back to the is_owner flag stored in the user's session (set at
+       login time from the Plex resources API ``owned`` field).
+    """
     if not user_info:
         return False
-    return user_info.get('username', '').lower() == owner
+    owner = config.OWNER_PLEX_USERNAME.strip().lower()
+    if owner:
+        return user_info.get('username', '').lower() == owner
+    return bool(user_info.get('is_owner'))
 
 
 def add_radarr_movie_handler(
