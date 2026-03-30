@@ -25,6 +25,11 @@ class SonarrAPI:
         response = _session.post(url, json=json_data, params={'apiKey': self.api_key}, timeout=timeout)
         return response
 
+    def _put(self, path, json_data, timeout=_TIMEOUT):
+        url = f"{self.base_url}{path}"
+        response = _session.put(url, json=json_data, params={'apiKey': self.api_key}, timeout=timeout)
+        return response
+
     def _delete(self, path, params=None, timeout=_TIMEOUT):
         url = f"{self.base_url}{path}"
         p = {'apiKey': self.api_key}
@@ -112,6 +117,39 @@ class SonarrAPI:
             return True
         except requests.exceptions.RequestException as e:
             print(f"Error deleting series from Sonarr: {e}")
+            return False
+
+    def get_series_by_tvdb_id(self, tvdb_id):
+        """Find a series in the Sonarr library by its TVDB ID. Returns the series dict or None."""
+        try:
+            series_list = self._get('/api/v3/series', timeout=120)
+            return next((s for s in series_list if s.get('tvdbId') == tvdb_id), None)
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting series from Sonarr: {e}")
+            return None
+
+    def update_series(self, series_id, series_data):
+        """Update an existing series in Sonarr. Returns (result_dict, None) on success."""
+        try:
+            response = self._put(f'/api/v3/series/{series_id}', series_data)
+            response.raise_for_status()
+            return response.json(), None
+        except requests.exceptions.RequestException as e:
+            print(f"Error updating series in Sonarr: {e}")
+            return None, str(e)
+
+    def search_season(self, series_id, season_number):
+        """Trigger a season search command in Sonarr. Returns True on success."""
+        try:
+            response = self._post('/api/v3/command', {
+                'name': 'SeasonSearch',
+                'seriesId': series_id,
+                'seasonNumber': season_number,
+            })
+            response.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            print(f"Error triggering season search in Sonarr: {e}")
             return False
 
     def add_series(self, series, root_folder_path, quality_profile_id, season_number=None):

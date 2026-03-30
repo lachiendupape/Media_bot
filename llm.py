@@ -361,6 +361,27 @@ def add_sonarr_series_handler(
     if result:
         return f"Great news! '{selected_series['title']}' Season {season} has been grabbed and is downloading now — it'll be with you shortly!"
     if error == 'already_exists':
+        # Series exists in library — check if the requested season is already monitored
+        tvdb_id = selected_series.get('tvdbId')
+        existing = sonarr.get_series_by_tvdb_id(tvdb_id) if tvdb_id else None
+        if existing:
+            existing_season = next((s for s in existing.get('seasons', []) if s['seasonNumber'] == season), None)
+            if existing_season and existing_season.get('monitored'):
+                return (
+                    f"Season {season} of '{existing['title']}' is already in your library "
+                    f"— no need to add it again!"
+                )
+            # Season is not monitored — enable it and trigger a search
+            if existing_season:
+                existing_season['monitored'] = True
+            updated, update_error = sonarr.update_series(existing['id'], existing)
+            if updated:
+                sonarr.search_season(existing['id'], season)
+                return (
+                    f"Great news! '{existing['title']}' Season {season} has been grabbed "
+                    f"and is downloading now — it'll be with you shortly!"
+                )
+            return f"Failed to update '{selected_series['title']}': {update_error}"
         return f"'{selected_series['title']} ({selected_series.get('year', '')})' is already in your library — no need to add it again!"
     return f"Failed to add TV series '{selected_series['title']}': {error}"
 
