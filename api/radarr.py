@@ -356,6 +356,56 @@ class RadarrCreditCache:
                 for r in rows
             ]
 
+    def search_title_credits(self, title, media_type=None, role=None):
+        """Search for people credits by media title. Returns list of dicts.
+
+        Args:
+            title: Movie or TV title to search.
+            media_type: 'movie', 'tv', or None for all.
+            role: 'actor', 'director', or None for all.
+        """
+        if not self.ready:
+            return None
+        query = title.lower().strip()
+
+        conditions = ['lower(title) = ?']
+        params = [query]
+        if media_type:
+            conditions.append('media_type = ?')
+            params.append(media_type)
+        if role:
+            conditions.append('role = ?')
+            params.append(role)
+        where = ' AND '.join(conditions)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                f'SELECT * FROM credits WHERE {where} ORDER BY year DESC, role, person_name', params
+            ).fetchall()
+
+            # Fall back to partial title match if exact match found nothing
+            if not rows:
+                conditions[0] = 'lower(title) LIKE ?'
+                params[0] = f'%{query}%'
+                where = ' AND '.join(conditions)
+                rows = conn.execute(
+                    f'SELECT * FROM credits WHERE {where} ORDER BY year DESC, role, person_name', params
+                ).fetchall()
+
+            return [
+                {
+                    'title': r['title'],
+                    'year': r['year'],
+                    'person_name': r['person_name'],
+                    'character': r['character'],
+                    'hasFile': bool(r['has_file']),
+                    'media_type': r['media_type'],
+                    'role': r['role'],
+                }
+                for r in rows
+            ]
+
 
 # Singleton cache instance
 credit_cache = RadarrCreditCache()

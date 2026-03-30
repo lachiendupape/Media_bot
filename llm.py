@@ -96,6 +96,38 @@ tools = [
     {
         "type": "function",
         "function": {
+            "name": "search_title_credits",
+            "description": (
+                "Searches the media library for cast and/or director credits for a specific movie "
+                "or TV series title. Use media_type='movie' for movies only, 'tv' for TV series "
+                "only, or omit for both. Use role='actor' for cast only, 'director' for directors "
+                "only, or omit for both."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "The movie or TV title to inspect for cast/director credits."
+                    },
+                    "media_type": {
+                        "type": "string",
+                        "enum": ["movie", "tv"],
+                        "description": "Filter by media type: 'movie' or 'tv'. Omit to search both."
+                    },
+                    "role": {
+                        "type": "string",
+                        "enum": ["actor", "director"],
+                        "description": "Filter by role: 'actor' or 'director'. Omit to include both."
+                    }
+                },
+                "required": ["title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "delete_movie",
             "description": "Removes a movie from the Radarr library. Only the server owner may call this.",
             "parameters": {
@@ -273,6 +305,75 @@ def search_by_person_handler(person_name: str, media_type: str = None, role: str
     return "\n".join(lines)
 
 
+def search_title_credits_handler(title: str, media_type: str = None, role: str = None) -> str:
+    results = credit_cache.search_title_credits(title, media_type=media_type, role=role)
+    if results is None:
+        return "The credit search index is still being built. Please try again in a moment."
+    if not results:
+        scope = []
+        if media_type:
+            scope.append("movies" if media_type == "movie" else "TV series")
+        if role:
+            scope.append(role + "s")
+        scope_str = " ".join(scope) if scope else "the library"
+        return f"No results for '{title}' found in {scope_str}."
+
+    # Group by matching title and format directors + cast for each matched title.
+    grouped = {}
+    for r in results:
+        key = (r['title'], r['year'], r['media_type'])
+        grouped.setdefault(key, []).append(r)
+
+    # If partial matching found multiple distinct titles, ask the user to disambiguate.
+    normalized_query = title.strip().lower()
+    exact_title_matches = [k for k in grouped if k[0].strip().lower() == normalized_query]
+    if len(grouped) > 1 and not exact_title_matches:
+        options = []
+        for matched_title, year, kind in sorted(grouped.keys(), key=lambda x: (x[0].lower(), x[1] or 0, x[2])):
+            label = "Movie" if kind == 'movie' else "TV"
+            options.append(f"- {matched_title} ({year}) [{label}]")
+        return (
+            f"I found multiple titles similar to '{title}'. Which one did you mean?\n"
+            + "\n".join(options[:10])
+        )
+
+    lines = []
+    for (matched_title, year, kind), credits in grouped.items():
+        label = "Movie" if kind == 'movie' else "TV"
+        lines.append(f"{label}: {matched_title} ({year})")
+
+        directors = []
+        actors = []
+        for c in credits:
+            if c['role'] == 'director':
+                if c['person_name'] not in directors:
+                    directors.append(c['person_name'])
+            elif c['role'] == 'actor':
+                actor_display = c['person_name']
+                if c.get('character'):
+                    actor_display = f"{actor_display} as {c['character']}"
+                if actor_display not in actors:
+                    actors.append(actor_display)
+
+        if role in (None, 'director'):
+            if directors:
+                lines.append("Directors: " + ", ".join(d.title() for d in directors))
+            else:
+                lines.append("Directors: none found")
+
+        if role in (None, 'actor'):
+            if actors:
+                lines.append("Cast: " + ", ".join(a.title() for a in actors[:20]))
+                if len(actors) > 20:
+                    lines.append(f"...and {len(actors) - 20} more")
+            else:
+                lines.append("Cast: none found")
+
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
 def delete_movie_handler(title: str, delete_files: bool = True, user_info: dict = None) -> str:
     if not _is_owner(user_info):
         return "❌ Sorry, only the server owner can delete media."
@@ -320,7 +421,7 @@ def delete_tv_series_handler(title: str, delete_files: bool = True, user_info: d
 def _parse_tool_call_from_text(text):
     """Fallback: parse a tool call if the model outputs it as raw JSON text."""
     VALID_TOOLS = {
-        'add_radarr_movie', 'add_sonarr_series', 'search_by_person',
+        'add_radarr_movie', 'add_sonarr_series', 'search_by_person', 'search_title_credits',
         'delete_movie', 'delete_tv_series',
     }
     match = re.search(r'\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]+\})\s*\}', text)
@@ -350,8 +451,9 @@ def chat_with_llm(user_message: str, user_info: dict = None) -> str:
             "role": "system",
             "content": (
                 "You are a media library assistant. You can add movies (via Radarr), add TV series "
-                "(via Sonarr), search the library by actor/actress or director name, and delete "
-                "movies or TV series (owner only).\n"
+                "(via Sonarr), search the library by actor/actress or director name, look up who "
+                "starred in or directed a given movie/TV title, and delete movies or TV series "
+                "(owner only).\n"
                 "RULES:\n"
                 "- When the user asks to ADD a MOVIE, call add_radarr_movie.\n"
                 "- When the user asks to ADD a TV SERIES or TV SHOW, call add_sonarr_series. "
@@ -365,6 +467,9 @@ def chat_with_llm(user_message: str, user_info: dict = None) -> str:
                 "'tv' for TV only, or omit for both.\n"
                 "- When the user asks what movies or shows a DIRECTOR directed, call search_by_person "
                 "with role='director'. Set media_type='movie' or 'tv' as appropriate.\n"
+                "- When the user asks WHO STARRED IN, WHO ACTS IN, WHO IS IN, or WHO DIRECTED a "
+                "specific movie or TV title, call search_title_credits with title set to that title. "
+                "Set role='actor' for cast questions and role='director' for director questions.\n"
                 "- When the user asks to DELETE or REMOVE a MOVIE, call delete_movie.\n"
                 "- When the user asks to DELETE or REMOVE a TV SERIES or TV SHOW, call delete_tv_series.\n"
                 "- For general questions, respond directly without calling any tools.\n"
@@ -407,6 +512,12 @@ def chat_with_llm(user_message: str, user_info: dict = None) -> str:
                 elif function_name == "search_by_person":
                     result = search_by_person_handler(
                         arguments.get("person_name"),
+                        media_type=arguments.get("media_type"),
+                        role=arguments.get("role"),
+                    )
+                elif function_name == "search_title_credits":
+                    result = search_title_credits_handler(
+                        arguments.get("title"),
                         media_type=arguments.get("media_type"),
                         role=arguments.get("role"),
                     )
