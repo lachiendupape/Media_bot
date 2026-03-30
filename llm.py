@@ -439,11 +439,11 @@ def _format_title_credits_results(results, title: str = None, role: str = None, 
 
         if role in (None, 'actor'):
             if actors:
-                lines.append("Cast:")
-                for actor in actors[:12]:
+                lines.append("Top billed cast:")
+                for actor in actors[:10]:
                     lines.append(f"- {actor}")
-                if len(actors) > 12:
-                    lines.append(f"- ...and {len(actors) - 12} more")
+                if len(actors) > 10:
+                    lines.append(f"- ...and {len(actors) - 10} more")
             else:
                 lines.append("Cast: none found")
 
