@@ -11,6 +11,7 @@ services:
       - FLASK_ENV=production
       - APP_VERSION=${MEDIA_BOT_VERSION:-latest}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=${PROD_OLLAMA_MODEL:-qwen2.5:7b}
       - DATA_DIR=/app/data
     extra_hosts:
       - "host.docker.internal:host-gateway"

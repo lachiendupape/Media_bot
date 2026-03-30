@@ -81,7 +81,7 @@ At minimum you need to set:
 | `PLEX_CLIENT_ID` | A random UUID for this app |
 | `OWNER_PLEX_USERNAME` | Plex username of the server owner (for delete permissions) |
 | `OLLAMA_BASE_URL` | Ollama API URL (default `http://127.0.0.1:11434`, set automatically in Docker) |
-| `OLLAMA_MODEL` | Ollama model name (default `qwen2.5:14b`) |
+| `OLLAMA_MODEL` | Default Ollama model name when not overridden by compose |
 | `APP_VERSION` | Version label shown in UI and attached to bug reports |
 | `LOG_LEVEL` | Backend log verbosity |
 | `OBSERVABILITY_SERVICE_NAME` | Service name used by observability exporters |
@@ -127,6 +127,8 @@ docker compose -f docker-compose.dev.yml up -d
 
 This runs an isolated local dev instance on `http://127.0.0.1:5001` with separate cache volume data.
 By default it uses `DEV_OLLAMA_MODEL` (falling back to `qwen2.5:7b`) so local feature testing works even when the larger production model is not installed.
+
+Production deploys use `PROD_OLLAMA_MODEL` (falling back to `qwen2.5:7b`) via `docker-compose.prod.yml`.
 
 Check status:
 
