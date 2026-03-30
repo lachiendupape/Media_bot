@@ -206,9 +206,14 @@ Deploy example:
 ./scripts/deploy-prod.ps1 -Ref v1.3.0
 ```
 
+The deploy script maps version tags like `v1.3.0` to the matching GHCR image tag.
+For branch refs such as `main` or `master`, it deploys `latest`.
+If the GHCR pull is denied or unavailable on the host, the script automatically
+falls back to a local Docker build using the same target image tag.
+
 ## Project Structure
 
-```
+`365``
 Media_bot/
   main.py            -- Flask server, routes, authentication
   llm.py             -- LLM integration, tool schemas, handlers
