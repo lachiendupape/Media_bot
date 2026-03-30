@@ -9,6 +9,7 @@ services:
       - .env
     environment:
       - FLASK_ENV=production
+      - APP_VERSION=${MEDIA_BOT_VERSION:-latest}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - DATA_DIR=/app/data
     extra_hosts:
