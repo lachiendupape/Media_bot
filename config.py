@@ -24,6 +24,7 @@ NZBHYDRA_API_KEY = os.getenv("NZBHYDRA_API_KEY")
 
 # Plex OAuth
 PLEX_SERVER_URL = os.getenv("PLEX_SERVER_URL")
+PLEX_TOKEN = os.getenv("PLEX_TOKEN", "")
 PLEX_MACHINE_ID = os.getenv("PLEX_MACHINE_ID")
 PLEX_CLIENT_ID = os.getenv("PLEX_CLIENT_ID")
 PLEX_APP_NAME = os.getenv("PLEX_APP_NAME", "Media Bot")

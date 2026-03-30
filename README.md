@@ -77,6 +77,7 @@ At minimum you need to set:
 | `FLASK_SECRET_KEY` | Random string for session signing (see below) |
 | `BOT_API_KEY` | Key for programmatic API access |
 | `PLEX_SERVER_URL` | Your Plex server URL |
+| `PLEX_TOKEN` | Optional Plex token used for TV cast lookups |
 | `PLEX_MACHINE_ID` | Plex server machine identifier |
 | `PLEX_CLIENT_ID` | A random UUID for this app |
 | `OWNER_PLEX_USERNAME` | Plex username of the server owner (for delete permissions) |
@@ -102,6 +103,8 @@ Find your Plex machine ID:
 ```bash
 curl -s http://YOUR_PLEX_IP:32400/identity | grep machineIdentifier
 ```
+
+For TV actor reverse lookup, set `PLEX_TOKEN` in `.env`. Sonarr v4 does not expose a working series credit endpoint, so Media Bot falls back to Plex metadata for TV cast.
 
 ### 4. Pull the Ollama model
 

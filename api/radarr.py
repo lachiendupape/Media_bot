@@ -5,6 +5,7 @@ import threading
 import time
 
 from config import RADARR_URL, RADARR_API_KEY
+from api.plex import PlexAPI
 
 # Shared session for connection pooling (reuses TCP+SSL connections)
 _session = requests.Session()
@@ -218,6 +219,7 @@ class RadarrCreditCache:
         print("[CreditCache] Building credit cache (movies + TV)...", flush=True)
         try:
             radarr = RadarrAPI()
+            plex = PlexAPI()
             # Lazy import to avoid circular dependency at module level
             from api.sonarr import SonarrAPI
             sonarr = SonarrAPI()
@@ -262,6 +264,7 @@ class RadarrCreditCache:
 
             # --- TV series (actors + directors) ---
             series_list = sonarr.get_library_series()
+            tv_rows = []
             if series_list:
                 for i, series in enumerate(series_list):
                     if (i + 1) % 50 == 0:
@@ -274,7 +277,7 @@ class RadarrCreditCache:
                         if not name:
                             continue
                         if credit_type == 'cast':
-                            rows.append((
+                            tv_rows.append((
                                 name,
                                 series.get('title', '?'),
                                 series.get('year'),
@@ -284,7 +287,7 @@ class RadarrCreditCache:
                                 'actor',
                             ))
                         elif credit_type == 'crew' and c.get('job', '').lower() == 'director':
-                            rows.append((
+                            tv_rows.append((
                                 name,
                                 series.get('title', '?'),
                                 series.get('year'),
@@ -293,6 +296,33 @@ class RadarrCreditCache:
                                 'tv',
                                 'director',
                             ))
+                if tv_rows:
+                    rows.extend(tv_rows)
+                elif plex.configured:
+                    print("[CreditCache] Sonarr credits unavailable; falling back to Plex TV metadata.", flush=True)
+                    plex_show_count = 0
+                    for section in plex.get_show_sections():
+                        shows = plex.get_section_shows(section['key'])
+                        for show in shows:
+                            plex_show_count += 1
+                            if plex_show_count % 50 == 0:
+                                print(f"[CreditCache] Plex TV metadata: {plex_show_count} titles", flush=True)
+                            for c in plex.get_show_credits(show['ratingKey']):
+                                name = c.get('personName', '').lower().strip()
+                                if not name:
+                                    continue
+                                rows.append((
+                                    name,
+                                    show.get('title', '?'),
+                                    show.get('year'),
+                                    c.get('character') or '?',
+                                    1,
+                                    'tv',
+                                    'actor',
+                                ))
+                    print(f"[CreditCache] Plex TV cast done: {plex_show_count} titles.", flush=True)
+                else:
+                    print("[CreditCache] Sonarr credits unavailable and PLEX_TOKEN not configured; TV cast search will be empty.", flush=True)
                 print(f"[CreditCache] TV series done: {len(series_list)} titles.", flush=True)
             else:
                 print("[CreditCache] No TV series fetched from Sonarr.", flush=True)

@@ -612,6 +612,17 @@ def _infer_media_type_from_query(text: str) -> str | None:
     return None
 
 
+def _normalize_short_plural_person_name(text: str) -> str:
+    cleaned = (text or '').strip(" '\u2019").strip()
+    if ' ' in cleaned:
+        return cleaned
+    if not re.fullmatch(r'[A-Za-z-]{4,5}', cleaned):
+        return cleaned
+    if not cleaned.lower().endswith('s'):
+        return cleaned
+    return cleaned[:-1]
+
+
 def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
     lowered = (user_message or '').strip()
 
@@ -636,18 +647,24 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
     # Use separate non-greedy patterns so the name doesn't swallow the trailing verb.
     _PERSON_PATTERNS = [
         # "what does/has/did [name] star/starred in"
-        re.compile(r'^what\s+(?:has|did|does)\s+(.+?)\s+(?:star(?:red|s)?(?:\s+in)?|been\s+in|appear(?:ed|s)?(?:\s+in)?|acted\s+in)\??$', re.IGNORECASE),
+        (re.compile(r'^what\s+(?:has|did|does)\s+(.+?)\s+(?:star(?:red|s)?(?:\s+in)?|been\s+in|appear(?:ed|s)?(?:\s+in)?|acted\s+in)\??$', re.IGNORECASE), None, False),
         # "list/show/find all [name]s" or "list [name]"
-        re.compile(r'^(?:list|show|find)\s+(?:all\s+|me\s+all\s+)?(.+?)(?:[\'\'s]*)?\??$', re.IGNORECASE),
+        (re.compile(r'^(?:list|show|find)\s+(?:all\s+|me\s+all\s+)?(.+?)(?:[\'\'s]*)?\??$', re.IGNORECASE), None, False),
         # "movies with [name]" / "movies starring [name]"
-        re.compile(r'^(?:what\s+)?movies?\s+(?:with|starring)\s+(.+?)\??$', re.IGNORECASE),
+        (re.compile(r'^(?:what\s+)?movies?\s+(?:with|starring)\s+(.+?)\??$', re.IGNORECASE), 'movie', False),
         # "shows with [name]" / "shows starring [name]"
-        re.compile(r'^(?:what\s+)?(?:tv\s+)?shows?\s+(?:with|starring)\s+(.+?)\??$', re.IGNORECASE),
+        (re.compile(r'^(?:what\s+)?(?:tv\s+)?shows?\s+(?:with|starring)\s+(.+?)\??$', re.IGNORECASE), 'tv', False),
+        # "any tv series with [name] starring" / "any tv shows with [name]"
+        (re.compile(r'^any\s+(?:tv\s+series|(?:tv\s+)?shows?)\s+(?:with\s+)?(.+?)(?:\s+star(?:ring|ing)|\s+staring)?\??$', re.IGNORECASE), 'tv', False),
+        # "any [name] in tv series" / "any [name] staring in tv series"
+        (re.compile(r'^any\s+(.+?)\s+(?:(?:star(?:ring|ing)|staring)\s+)?in\s+(?:tv\s+series|(?:tv\s+)?shows?)\??$', re.IGNORECASE), 'tv', True),
     ]
-    for idx, pat in enumerate(_PERSON_PATTERNS):
+    for pat, media_type, normalize_short_plural in _PERSON_PATTERNS:
         pm = pat.match(lowered)
         if pm:
             name = pm.group(1).strip(" '\u2019s").strip()
+            if normalize_short_plural:
+                name = _normalize_short_plural_person_name(name)
             # Guard: skip if the extracted name looks like a command keyword rather than a real name
             if name and len(name) >= 2 and not re.search(
                 r'^\s*(?:add|delete|remove|find|search|list|show|movies?|shows?|series|all)\s*$',
@@ -655,11 +672,6 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
             ):
                 if telemetry is not None:
                     telemetry['heuristic_route'] = 'search_by_person:actor'
-                media_type = None
-                if idx == 2:
-                    media_type = 'movie'
-                elif idx == 3:
-                    media_type = 'tv'
                 return search_by_person_handler(name, media_type=media_type, role='actor', state=state)
 
     # --- Decade follow-up: "around in the 80s" / "in the 90s" when we have a recent person search ---
