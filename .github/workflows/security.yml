@@ -70,23 +70,30 @@ jobs:
           mkdir -p security-reports
           : > security-reports/targets.txt
 
-          add_targets() {
-            local file="$1"
-            if [[ -f "$file" ]]; then
-              grep -Ev '^\s*($|#)' "$file" >> security-reports/targets.txt || true
+          add_targets_preferred() {
+            local local_file="$1"
+            local example_file="$2"
+
+            local selected_file="$local_file"
+            if [[ ! -f "$selected_file" ]]; then
+              selected_file="$example_file"
+            fi
+
+            if [[ -f "$selected_file" ]]; then
+              grep -Ev '^\s*($|#)' "$selected_file" >> security-reports/targets.txt || true
             fi
           }
 
           case "$PROFILE" in
             prod)
-              add_targets scripts/security/targets-prod.txt
+              add_targets_preferred scripts/security/targets-prod.txt scripts/security/targets-prod.example.txt
               ;;
             dev)
-              add_targets scripts/security/targets-dev.txt
+              add_targets_preferred scripts/security/targets-dev.txt scripts/security/targets-dev.example.txt
               ;;
             both)
-              add_targets scripts/security/targets-prod.txt
-              add_targets scripts/security/targets-dev.txt
+              add_targets_preferred scripts/security/targets-prod.txt scripts/security/targets-prod.example.txt
+              add_targets_preferred scripts/security/targets-dev.txt scripts/security/targets-dev.example.txt
               ;;
             *)
               echo "Unknown profile '$PROFILE'" >&2

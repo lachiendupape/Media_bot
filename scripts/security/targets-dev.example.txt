@@ -1,0 +1,5 @@
+# Copy this file to scripts/security/targets-dev.txt for local dev/staging targets.
+# Keep scripts/security/targets-dev.txt untracked (gitignored).
+
+# https://mediabot-dev.example.com
+# https://radarr-dev.example.com

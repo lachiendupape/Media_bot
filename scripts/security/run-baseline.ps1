@@ -32,8 +32,27 @@ function Get-TargetsFromFile {
         Where-Object { $_ -and -not $_.StartsWith("#") }
 }
 
-$prodTargets = Get-TargetsFromFile (Join-Path $PSScriptRoot "targets-prod.txt")
-$devTargets = Get-TargetsFromFile (Join-Path $PSScriptRoot "targets-dev.txt")
+function Resolve-TargetFile {
+    param(
+        [string]$LocalPath,
+        [string]$ExamplePath
+    )
+
+    if (Test-Path $LocalPath) {
+        return $LocalPath
+    }
+    return $ExamplePath
+}
+
+$prodFile = Resolve-TargetFile `
+    -LocalPath (Join-Path $PSScriptRoot "targets-prod.txt") `
+    -ExamplePath (Join-Path $PSScriptRoot "targets-prod.example.txt")
+$devFile = Resolve-TargetFile `
+    -LocalPath (Join-Path $PSScriptRoot "targets-dev.txt") `
+    -ExamplePath (Join-Path $PSScriptRoot "targets-dev.example.txt")
+
+$prodTargets = Get-TargetsFromFile $prodFile
+$devTargets = Get-TargetsFromFile $devFile
 
 $targets = @()
 switch ($Profile) {

@@ -46,3 +46,7 @@ credit_cache.db
 Agent2.md
 gemini_chat.md
 TODO.md
+
+# Security scan targets (local real targets only)
+scripts/security/targets-*.txt
+!scripts/security/targets-*.example.txt

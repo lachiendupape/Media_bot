@@ -1,4 +1,0 @@
-# Add staging/dev URLs here when available.
-# Examples:
-# https://mediabot-dev.alexlovett.co.uk
-# https://radarr-dev.alexlovett.co.uk

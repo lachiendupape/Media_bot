@@ -208,8 +208,8 @@ Media_bot/
     deploy-prod.ps1  -- Deploy stack from a git ref/tag (GitOps-style)
     security/
       run-baseline.ps1   -- Local baseline scanner (ZAP + Nuclei)
-      targets-prod.txt   -- Production web targets
-      targets-dev.txt    -- Dev/staging web targets
+      targets-prod.example.txt -- Production target template
+      targets-dev.example.txt  -- Dev/staging target template
   templates/
     login.html       -- Plex sign-in page
     chat.html        -- Chat interface
@@ -248,10 +248,18 @@ Use `docker-compose.prod.yml` with `MEDIA_BOT_VERSION` to declare the desired ru
 
 This repository includes a baseline security scanning setup for your front-end domains.
 
-- Production targets list: `scripts/security/targets-prod.txt`
-- Dev/staging targets list: `scripts/security/targets-dev.txt`
+- Production targets example: `scripts/security/targets-prod.example.txt`
+- Dev/staging targets example: `scripts/security/targets-dev.example.txt`
+- Local override files (gitignored): `scripts/security/targets-prod.txt` and `scripts/security/targets-dev.txt`
 - One-command local baseline runner: `scripts/security/run-baseline.ps1`
 - Scheduled GitHub workflow: `.github/workflows/security.yml`
+
+Create local target files from examples:
+
+```powershell
+Copy-Item scripts/security/targets-prod.example.txt scripts/security/targets-prod.txt
+Copy-Item scripts/security/targets-dev.example.txt scripts/security/targets-dev.txt
+```
 
 ### 1) One-command local baseline scan
 
