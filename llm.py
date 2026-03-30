@@ -7,6 +7,7 @@ from openai import OpenAI
 from api.radarr import RadarrAPI, credit_cache
 from api.sonarr import SonarrAPI
 import config
+import quota
 from observability import redact_sensitive_fields, start_span
 
 log = logging.getLogger(__name__)
@@ -213,15 +214,33 @@ def _is_owner(user_info):
     return bool(user_info.get('is_owner'))
 
 
+def _user_identity(user_info: dict | None) -> tuple[str, str]:
+    """Return a ``(user_id, username)`` pair suitable for quota accounting.
+
+    When ``user_info`` is available (browser/session auth) the Plex user ID and
+    username are used.  For API-key users or unauthenticated requests a stable
+    fallback identifier is returned so quota checks still function.
+    """
+    if user_info:
+        return str(user_info.get('id', 'unknown')), user_info.get('username', 'unknown')
+    return 'api_key', 'api_key'
+
+
 def add_radarr_movie_handler(
     title: str,
     state: dict = None,
     preferred_tmdb_id: int = None,
     preferred_year: int = None,
+    user_info: dict = None,
 ) -> str:
     ok, msg = _check_disk_space()
     if not ok:
         return msg
+
+    user_id, username = _user_identity(user_info)
+    allowed, quota_msg = quota.check_quota(user_id, username, "movie")
+    if not allowed:
+        return quota_msg
 
     radarr = RadarrAPI()
     movies = radarr.lookup_movie(title)
@@ -268,6 +287,7 @@ def add_radarr_movie_handler(
     quality_profile_id = quality_profiles[0]['id']
     result, error = radarr.add_movie(selected_movie, root_folder['path'], quality_profile_id)
     if result:
+        quota.record_download(user_id, username, "movie", selected_movie['title'])
         return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
     if error == 'already_exists':
         return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
@@ -279,10 +299,16 @@ def add_sonarr_series_handler(
     state: dict = None,
     preferred_tvdb_id: int = None,
     preferred_year: int = None,
+    user_info: dict = None,
 ) -> str:
     ok, msg = _check_disk_space()
     if not ok:
         return msg
+
+    user_id, username = _user_identity(user_info)
+    allowed, quota_msg = quota.check_quota(user_id, username, "tv_season")
+    if not allowed:
+        return quota_msg
 
     sonarr = SonarrAPI()
     series = sonarr.lookup_series(title)
@@ -350,15 +376,16 @@ def add_sonarr_series_handler(
     root_folder = sonarr.get_root_folder()
     if not root_folder:
         return "Failed to retrieve Sonarr root folder."
-        
+
     quality_profiles = sonarr.get_quality_profiles()
     if not quality_profiles:
         return "Failed to retrieve Sonarr quality profiles."
-    
+
     quality_profile_id = quality_profiles[0]['id']
     result, error = sonarr.add_series(selected_series, root_folder['path'], quality_profile_id, season_number=season)
-    
+
     if result:
+        quota.record_download(user_id, username, "tv_season", f"{selected_series['title']} S{season:02d}")
         return f"Great news! '{selected_series['title']}' Season {season} has been grabbed and is downloading now — it'll be with you shortly!"
     if error == 'already_exists':
         # Series exists in library — check if the requested season is already monitored
@@ -377,6 +404,7 @@ def add_sonarr_series_handler(
             updated, update_error = sonarr.update_series(existing['id'], existing)
             if updated:
                 sonarr.search_season(existing['id'], season)
+                quota.record_download(user_id, username, "tv_season", f"{existing['title']} S{season:02d}")
                 return (
                     f"Great news! '{existing['title']}' Season {season} has been grabbed "
                     f"and is downloading now — it'll be with you shortly!"
@@ -557,7 +585,7 @@ def _format_title_credits_results(results, title: str = None, role: str = None, 
     return "\n".join(lines).strip()
 
 
-def _resolve_pending_numeric_selection(user_message: str, state: dict = None) -> str | None:
+def _resolve_pending_numeric_selection(user_message: str, state: dict = None, user_info: dict = None) -> str | None:
     """Resolve numeric follow-ups for pending title disambiguation and series season selection."""
     if state is None:
         return None
@@ -578,6 +606,7 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None) ->
             state=state,
             preferred_tmdb_id=picked.get('tmdbId'),
             preferred_year=picked.get('year'),
+            user_info=user_info,
         )
 
     # Pending series disambiguation for add_sonarr_series flow.
@@ -594,6 +623,7 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None) ->
             state=state,
             preferred_tvdb_id=picked.get('tvdbId'),
             preferred_year=picked.get('year'),
+            user_info=user_info,
         )
 
     # Pending season selection for add_sonarr_series flow.
@@ -614,6 +644,7 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None) ->
                 state=state,
                 preferred_tvdb_id=pending_series.get('tvdbId'),
                 preferred_year=pending_series.get('year'),
+                user_info=user_info,
             )
 
     pending = state.get('pending_title_lookup')
@@ -894,7 +925,7 @@ def chat_with_llm(
         'request_id': request_id,
     })
 
-    numeric_selection_result = _resolve_pending_numeric_selection(user_message, state=state)
+    numeric_selection_result = _resolve_pending_numeric_selection(user_message, state=state, user_info=user_info)
     if numeric_selection_result is not None:
         telemetry['numeric_selection'] = True
         return numeric_selection_result
@@ -985,12 +1016,13 @@ def chat_with_llm(
                 
                 with start_span('llm.tool_execution', {'tool.name': function_name}):
                     if function_name == "add_radarr_movie":
-                        result = add_radarr_movie_handler(arguments.get("title"), state=state)
+                        result = add_radarr_movie_handler(arguments.get("title"), state=state, user_info=user_info)
                     elif function_name == "add_sonarr_series":
                         result = add_sonarr_series_handler(
                             arguments.get("title"),
                             season=arguments.get("season"),
                             state=state,
+                            user_info=user_info,
                         )
                     elif function_name == "search_by_person":
                         requested_media_type = arguments.get("media_type")
