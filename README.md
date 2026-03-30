@@ -108,6 +108,14 @@ docker compose up -d
 
 This builds the image, starts the container, and connects to Ollama on your host machine. The credit cache is persisted in a Docker volume.
 
+**With Docker (dev instance on localhost:5001):**
+
+```bash
+docker compose -f docker-compose.dev.yml up -d
+```
+
+This runs an isolated local dev instance on `http://127.0.0.1:5001` with separate cache volume data.
+
 **Without Docker:**
 
 ```bash
@@ -152,6 +160,33 @@ curl -X POST http://localhost:5000/chat \
 | GET | `/auth/callback` | None | Plex OAuth callback |
 | GET | `/auth/logout` | None | Clear session |
 
+## Dev and Release Environments
+
+- `docker-compose.yml`: default local/prod-like build on port 5000
+- `docker-compose.dev.yml`: local-only dev stack on `127.0.0.1:5001`
+- `docker-compose.prod.yml`: production stack pinned to a GHCR image tag via `MEDIA_BOT_VERSION`
+
+Typical workflow:
+
+1. Develop and test locally with `docker-compose.dev.yml`.
+2. Merge to `main` when ready.
+3. Create and push a version tag (for example `v1.3.0`).
+4. GitHub Actions builds and publishes `ghcr.io/lachiendupape/media-bot:v1.3.0`.
+5. Deploy from git ref/tag on host with the deploy script.
+
+Release tagging example:
+
+```bash
+git tag v1.3.0
+git push origin v1.3.0
+```
+
+Deploy example:
+
+```powershell
+./scripts/deploy-prod.ps1 -Ref v1.3.0
+```
+
 ## Project Structure
 
 ```
@@ -162,11 +197,15 @@ Media_bot/
   config.py          -- Environment variable loading and validation
   Dockerfile         -- Container image definition
   docker-compose.yml -- Container orchestration
+  docker-compose.dev.yml  -- Local-only development stack (127.0.0.1:5001)
+  docker-compose.prod.yml -- Production stack using GHCR image tags
   pyproject.toml     -- Ruff linter configuration
   api/
     radarr.py        -- Radarr API wrapper and SQLite credit cache
     sonarr.py        -- Sonarr API wrapper
     lidarr.py        -- Lidarr API wrapper (status check only)
+  scripts/
+    deploy-prod.ps1  -- Deploy stack from a git ref/tag (GitOps-style)
   templates/
     login.html       -- Plex sign-in page
     chat.html        -- Chat interface
@@ -174,6 +213,7 @@ Media_bot/
   .github/
     workflows/
       ci.yml         -- GitHub Actions lint and syntax check
+      release.yml    -- GitHub Actions Docker image publish on version tags
   requirements.txt   -- Python dependencies
 ```
 
@@ -192,6 +232,12 @@ A GitHub Actions workflow (`.github/workflows/ci.yml`) runs automatically on eve
 3. **Checks syntax** — `python -m compileall` confirms every `.py` file parses without errors.
 
 No secrets or service credentials are needed for CI; it only checks the Python source.
+
+## GitOps Release Flow
+
+The repository now includes a release workflow (`.github/workflows/release.yml`) that publishes versioned container images to GHCR when you push a tag like `v1.3.0`.
+
+Use `docker-compose.prod.yml` with `MEDIA_BOT_VERSION` to declare the desired running version. Deploying from a git tag with `scripts/deploy-prod.ps1` makes release state traceable and reproducible from Git history.
 
 ## License
 

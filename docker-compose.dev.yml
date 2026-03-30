@@ -1,0 +1,26 @@
+services:
+  media-bot-dev:
+    build: .
+    container_name: media-bot-dev
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5001:5000"
+    env_file:
+      - .env
+    environment:
+      - FLASK_ENV=development
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - DATA_DIR=/app/data-dev
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - cache-data-dev:/app/data-dev
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/health', timeout=5).raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  cache-data-dev:
