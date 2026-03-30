@@ -1,9 +1,12 @@
 import json
+import logging
 import re
 from openai import OpenAI
 from api.radarr import RadarrAPI, credit_cache
 from api.sonarr import SonarrAPI
 import config
+
+log = logging.getLogger(__name__)
 
 # Minimum free disk space percentage before blocking new downloads
 _DISK_FREE_THRESHOLD = 0.05  # 5%
@@ -431,6 +434,6 @@ def chat_with_llm(user_message: str, user_info: dict = None) -> str:
             return response_message.content
 
     except Exception as e:
-        import traceback
-        return f"Error communicating with AI: {str(e)}\n{traceback.format_exc()}"
+        log.exception("Error in chat_with_llm")
+        return "Something went wrong while processing your request. Please try again."
 

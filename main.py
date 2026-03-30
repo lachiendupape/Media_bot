@@ -134,7 +134,7 @@ def health():
     return jsonify({
         "status": "running",
         "service": "Media Bot LLM",
-        "actor_cache": "ready" if credit_cache.ready else "building"
+        "credit_cache": "ready" if credit_cache.ready else "building"
     })
 
 @app.route('/cache/rebuild', methods=['POST'])

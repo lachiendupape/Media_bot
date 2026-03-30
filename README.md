@@ -6,7 +6,9 @@ A natural-language media library assistant that lets you search and manage your 
 
 - **Add movies** -- tell it a title and it searches Radarr, adds the movie, and kicks off a download.
 - **Add TV series by season** -- searches Sonarr, lists available seasons, and lets you pick which to grab.
-- **Search by actor** -- queries a local credit cache to find every film in your library starring a given actor.
+- **Search by person** -- queries a local credit cache to find movies and TV series by actor or director name, with optional filters for media type and role.
+- **Delete media (owner only)** -- the Plex server owner can remove movies or TV series (with file deletion) through the chat.
+- **Disk space guard** -- blocks new downloads when any disk drops below 5% free space.
 - **Plex OAuth login** -- browser-based sign-in using your Plex account; only users with access to your server can use the bot.
 - **API key access** -- programmatic access via `X-Api-Key` header for scripts and automation.
 - **Web chat UI** -- dark-themed chat interface with user avatars and real-time responses.
@@ -21,8 +23,10 @@ Browser / API client
    Ollama (qwen2.5:14b, port 11434) [host]
         |
    Tool handlers
-    /    |    \
-Radarr  Sonarr  SQLite credit cache
+    /    |    \    \
+Radarr  Sonarr  Plex  SQLite credit cache
+                        (actors + directors,
+                         movies + TV series)
 ```
 
 The LLM decides which tool to call based on the user's message. Tool handlers call the Radarr/Sonarr APIs directly over your LAN and return human-readable responses.
@@ -70,6 +74,9 @@ At minimum you need to set:
 | `PLEX_SERVER_URL` | Your Plex server URL |
 | `PLEX_MACHINE_ID` | Plex server machine identifier |
 | `PLEX_CLIENT_ID` | A random UUID for this app |
+| `OWNER_PLEX_USERNAME` | Plex username of the server owner (for delete permissions) |
+| `OLLAMA_BASE_URL` | Ollama API URL (default `http://127.0.0.1:11434`, set automatically in Docker) |
+| `OLLAMA_MODEL` | Ollama model name (default `qwen2.5:14b`) |
 
 Generate a secret key:
 
@@ -116,6 +123,8 @@ Navigate to `http://localhost:5000` and sign in with your Plex account. Then cha
 - "Add the movie Sinners"
 - "Add the show Adolescence" (it will list seasons and ask which you want)
 - "What movies do I have with Tom Hanks?"
+- "What has Christopher Nolan directed?"
+- "Delete the movie Jaws 3" (owner only)
 
 ### API access
 
@@ -133,7 +142,7 @@ curl -X POST http://localhost:5000/chat \
 | GET | `/` | Session | Web chat UI |
 | POST | `/chat` | Session or API key | Send a message, get a response |
 | GET | `/health` | None | Service health check |
-| POST | `/cache/rebuild` | Session or API key | Rebuild the actor credit cache |
+| POST | `/cache/rebuild` | Session or API key | Rebuild the credit cache |
 | GET | `/auth/login` | None | Plex login page |
 | GET | `/auth/start` | None | Initiate Plex OAuth flow |
 | GET | `/auth/callback` | None | Plex OAuth callback |
@@ -149,6 +158,7 @@ Media_bot/
   config.py          -- Environment variable loading and validation
   Dockerfile         -- Container image definition
   docker-compose.yml -- Container orchestration
+  pyproject.toml     -- Ruff linter configuration
   api/
     radarr.py        -- Radarr API wrapper and SQLite credit cache
     sonarr.py        -- Sonarr API wrapper
@@ -157,6 +167,9 @@ Media_bot/
     login.html       -- Plex sign-in page
     chat.html        -- Chat interface
   .env.example       -- Template for environment variables
+  .github/
+    workflows/
+      ci.yml         -- GitHub Actions lint and syntax check
   requirements.txt   -- Python dependencies
 ```
 
