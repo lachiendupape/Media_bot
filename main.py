@@ -7,6 +7,7 @@ import json
 import logging
 import threading
 import hmac
+import hashlib
 import time
 import uuid
 from collections import OrderedDict
@@ -52,6 +53,8 @@ if os.getenv('FLASK_ENV') == 'production':
 BOT_API_KEY = os.getenv('BOT_API_KEY')
 _RECENT_REQUESTS = OrderedDict()
 _RECENT_REQUEST_LIMIT = 200
+_API_KEY_CHAT_STATES = OrderedDict()
+_API_KEY_CHAT_STATE_LIMIT = 200
 
 
 def _remember_request_context(request_id, payload):
@@ -59,6 +62,34 @@ def _remember_request_context(request_id, payload):
     _RECENT_REQUESTS.move_to_end(request_id)
     while len(_RECENT_REQUESTS) > _RECENT_REQUEST_LIMIT:
         _RECENT_REQUESTS.popitem(last=False)
+
+
+def _api_key_state_id(raw_key: str) -> str | None:
+    if not raw_key:
+        return None
+    return hashlib.sha256(raw_key.encode('utf-8')).hexdigest()[:24]
+
+
+def _load_chat_state_for_request() -> tuple[dict, str | None]:
+    # Browser/session auth uses Flask session cookie state.
+    if session.get('plex_user'):
+        return session.get('chat_state', {}), None
+
+    # API-key auth may be used by scripts that don't persist cookies.
+    state_id = _api_key_state_id(request.headers.get('X-Api-Key', ''))
+    if not state_id:
+        return session.get('chat_state', {}), None
+    return _API_KEY_CHAT_STATES.get(state_id, {}), state_id
+
+
+def _save_chat_state_for_request(chat_state: dict, api_key_state_id: str | None):
+    if api_key_state_id:
+        _API_KEY_CHAT_STATES[api_key_state_id] = chat_state
+        _API_KEY_CHAT_STATES.move_to_end(api_key_state_id)
+        while len(_API_KEY_CHAT_STATES) > _API_KEY_CHAT_STATE_LIMIT:
+            _API_KEY_CHAT_STATES.popitem(last=False)
+        return
+    session['chat_state'] = chat_state
 
 
 def _auth_mode():
@@ -357,7 +388,7 @@ def chat():
             },
         )
         user_info = session.get('plex_user')
-        chat_state = session.get('chat_state', {})
+        chat_state, api_key_state = _load_chat_state_for_request()
         llm_telemetry = {}
         response_text = chat_with_llm(
             user_message,
@@ -366,7 +397,7 @@ def chat():
             request_id=g.request_id,
             telemetry=llm_telemetry,
         )
-        session['chat_state'] = chat_state
+        _save_chat_state_for_request(chat_state, api_key_state)
         session['last_request_id'] = g.request_id
         _remember_request_context(g.request_id, {
             'request_id': g.request_id,

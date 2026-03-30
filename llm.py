@@ -234,7 +234,7 @@ def add_radarr_movie_handler(title: str) -> str:
         return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
     return f"Failed to add movie '{selected_movie['title']}': {error}"
 
-def add_sonarr_series_handler(title: str, season: int = None) -> str:
+def add_sonarr_series_handler(title: str, season: int = None, state: dict = None) -> str:
     ok, msg = _check_disk_space()
     if not ok:
         return msg
@@ -251,6 +251,12 @@ def add_sonarr_series_handler(title: str, season: int = None) -> str:
     if season is None:
         if not seasons:
             return f"'{selected_series['title']}' has no season information available."
+        if state is not None:
+            state['pending_series_add'] = {
+                'title': selected_series.get('title', title),
+                'year': selected_series.get('year'),
+                'available_seasons': sorted(s['seasonNumber'] for s in seasons),
+            }
         season_list = ", ".join(str(s['seasonNumber']) for s in seasons)
         return (
             f"'{selected_series['title']} ({selected_series.get('year', '')})' has "
@@ -262,6 +268,9 @@ def add_sonarr_series_handler(title: str, season: int = None) -> str:
     valid_numbers = {s['seasonNumber'] for s in seasons}
     if season not in valid_numbers:
         return f"Season {season} doesn't exist for '{selected_series['title']}'. Available seasons: {', '.join(str(n) for n in sorted(valid_numbers))}."
+
+    if state is not None:
+        state.pop('pending_series_add', None)
 
     root_folder = sonarr.get_root_folder()
     if not root_folder:
@@ -453,14 +462,33 @@ def _format_title_credits_results(results, title: str = None, role: str = None, 
 
 
 def _resolve_pending_numeric_selection(user_message: str, state: dict = None) -> str | None:
-    """Resolve numeric replies (e.g. '2') against stored disambiguation options."""
+    """Resolve numeric follow-ups for pending title disambiguation and series season selection."""
     if state is None:
-        return None
-    pending = state.get('pending_title_lookup')
-    if not pending:
         return None
 
     trimmed = (user_message or '').strip()
+
+    # Pending season selection for add_sonarr_series flow.
+    pending_series = state.get('pending_series_add')
+    if pending_series:
+        m = re.match(r'^(?:season\s*)?(\d+)$', trimmed, flags=re.IGNORECASE)
+        if m:
+            season = int(m.group(1))
+            available = pending_series.get('available_seasons', [])
+            if available and season not in available:
+                return (
+                    f"Please choose one of the available seasons for '{pending_series.get('title', 'that series')}': "
+                    f"{', '.join(str(n) for n in available)}."
+                )
+            return add_sonarr_series_handler(
+                pending_series.get('title', ''),
+                season=season,
+                state=state,
+            )
+
+    pending = state.get('pending_title_lookup')
+    if not pending:
+        return None
     if not trimmed.isdigit():
         return None
 
@@ -825,7 +853,11 @@ def chat_with_llm(
                     if function_name == "add_radarr_movie":
                         result = add_radarr_movie_handler(arguments.get("title"))
                     elif function_name == "add_sonarr_series":
-                        result = add_sonarr_series_handler(arguments.get("title"), season=arguments.get("season"))
+                        result = add_sonarr_series_handler(
+                            arguments.get("title"),
+                            season=arguments.get("season"),
+                            state=state,
+                        )
                     elif function_name == "search_by_person":
                         requested_media_type = arguments.get("media_type")
                         inferred_media_type = _infer_media_type_from_query(user_message)
