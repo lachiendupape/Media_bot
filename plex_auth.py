@@ -66,7 +66,10 @@ def get_plex_user(auth_token):
 
 
 def user_has_server_access(auth_token):
-    """Check if the user's Plex account can see our server (is an invited friend or owner)."""
+    """Check if the user's Plex account can see our server (is an invited friend or owner).
+
+    Returns a tuple (has_access: bool, is_owner: bool).
+    """
     r = requests.get(
         'https://plex.tv/api/v2/resources',
         headers={**PLEX_HEADERS, 'X-Plex-Token': auth_token},
@@ -76,5 +79,5 @@ def user_has_server_access(auth_token):
     r.raise_for_status()
     for resource in r.json():
         if resource.get('clientIdentifier') == PLEX_MACHINE_ID:
-            return True
-    return False
+            return True, bool(resource.get('owned'))
+    return False, False
