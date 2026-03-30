@@ -49,6 +49,12 @@ GITHUB_ISSUES_ENABLED = bool(GITHUB_ISSUES_TOKEN and GITHUB_ISSUES_REPO and "/" 
 # Owner account — only this Plex username may delete media
 OWNER_PLEX_USERNAME = os.getenv("OWNER_PLEX_USERNAME", "")
 
+# Download quotas
+QUOTA_ENABLED = os.getenv("QUOTA_ENABLED", "").lower() in ("1", "true", "yes")
+# 0 means unlimited; positive integers set the daily cap
+DAILY_MOVIE_QUOTA = int(os.getenv("DAILY_MOVIE_QUOTA", "0"))
+DAILY_TV_SEASON_QUOTA = int(os.getenv("DAILY_TV_SEASON_QUOTA", "0"))
+
 # Flask
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 if not FLASK_SECRET_KEY or len(FLASK_SECRET_KEY) < 16:
