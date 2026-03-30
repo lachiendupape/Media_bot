@@ -116,6 +116,12 @@ docker compose -f docker-compose.dev.yml up -d
 
 This runs an isolated local dev instance on `http://127.0.0.1:5001` with separate cache volume data.
 
+Check status:
+
+```bash
+docker compose -f docker-compose.dev.yml ps
+```
+
 **Without Docker:**
 
 ```bash

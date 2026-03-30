@@ -1,3 +1,5 @@
+name: media_bot_dev
+
 services:
   media-bot-dev:
     build: .
