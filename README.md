@@ -206,6 +206,10 @@ Media_bot/
     lidarr.py        -- Lidarr API wrapper (status check only)
   scripts/
     deploy-prod.ps1  -- Deploy stack from a git ref/tag (GitOps-style)
+    security/
+      run-baseline.ps1   -- Local baseline scanner (ZAP + Nuclei)
+      targets-prod.txt   -- Production web targets
+      targets-dev.txt    -- Dev/staging web targets
   templates/
     login.html       -- Plex sign-in page
     chat.html        -- Chat interface
@@ -214,6 +218,7 @@ Media_bot/
     workflows/
       ci.yml         -- GitHub Actions lint and syntax check
       release.yml    -- GitHub Actions Docker image publish on version tags
+      security.yml   -- GitHub Actions scheduled/manual security scans
   requirements.txt   -- Python dependencies
 ```
 
@@ -238,6 +243,57 @@ No secrets or service credentials are needed for CI; it only checks the Python s
 The repository now includes a release workflow (`.github/workflows/release.yml`) that publishes versioned container images to GHCR when you push a tag like `v1.3.0`.
 
 Use `docker-compose.prod.yml` with `MEDIA_BOT_VERSION` to declare the desired running version. Deploying from a git tag with `scripts/deploy-prod.ps1` makes release state traceable and reproducible from Git history.
+
+## Security Scanning (Local + GitOps)
+
+This repository includes a baseline security scanning setup for your front-end domains.
+
+- Production targets list: `scripts/security/targets-prod.txt`
+- Dev/staging targets list: `scripts/security/targets-dev.txt`
+- One-command local baseline runner: `scripts/security/run-baseline.ps1`
+- Scheduled GitHub workflow: `.github/workflows/security.yml`
+
+### 1) One-command local baseline scan
+
+Requirements:
+
+- Docker (for OWASP ZAP baseline)
+- Nuclei CLI on your machine (`nuclei` in PATH)
+
+Run production profile:
+
+```powershell
+./scripts/security/run-baseline.ps1 -Profile prod
+```
+
+Run dev profile:
+
+```powershell
+./scripts/security/run-baseline.ps1 -Profile dev
+```
+
+Run both profiles:
+
+```powershell
+./scripts/security/run-baseline.ps1 -Profile both
+```
+
+Reports are written under `security-reports/<timestamp>/`.
+
+### 2) CI security job (Nuclei + Trivy)
+
+The `Security Scans` workflow runs:
+
+- Trivy filesystem scan (dependency and config findings in SARIF)
+- Nuclei web scan against selected target profile
+
+Trigger manually from GitHub Actions with profile `prod`, `dev`, or `both`.
+
+### 3) Weekly scheduled scan profile
+
+The workflow runs weekly (Monday 04:00 UTC) and defaults to the `prod` profile.
+
+To include staging/dev in scheduled scans, populate `scripts/security/targets-dev.txt` with reachable dev URLs.
 
 ## License
 

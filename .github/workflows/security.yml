@@ -1,0 +1,127 @@
+name: Security Scans
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "Target profile"
+        required: true
+        default: "prod"
+        type: choice
+        options:
+          - prod
+          - dev
+          - both
+  schedule:
+    - cron: "0 4 * * 1"
+
+jobs:
+  trivy-filesystem:
+    name: Trivy filesystem scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Upload Trivy artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-results
+          path: trivy-results.sarif
+
+  nuclei-web:
+    name: Nuclei web scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build target list for selected profile
+        id: targets
+        shell: bash
+        run: |
+          PROFILE="${{ github.event.inputs.profile }}"
+          if [[ -z "$PROFILE" ]]; then
+            PROFILE="prod"
+          fi
+
+          mkdir -p security-reports
+          : > security-reports/targets.txt
+
+          add_targets() {
+            local file="$1"
+            if [[ -f "$file" ]]; then
+              grep -Ev '^\s*($|#)' "$file" >> security-reports/targets.txt || true
+            fi
+          }
+
+          case "$PROFILE" in
+            prod)
+              add_targets scripts/security/targets-prod.txt
+              ;;
+            dev)
+              add_targets scripts/security/targets-dev.txt
+              ;;
+            both)
+              add_targets scripts/security/targets-prod.txt
+              add_targets scripts/security/targets-dev.txt
+              ;;
+            *)
+              echo "Unknown profile '$PROFILE'" >&2
+              exit 1
+              ;;
+          esac
+
+          sort -u security-reports/targets.txt -o security-reports/targets.txt
+
+          if [[ ! -s security-reports/targets.txt ]]; then
+            echo "has_targets=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_targets=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "Selected profile: $PROFILE"
+          cat security-reports/targets.txt || true
+
+      - name: Run Nuclei scan
+        if: steps.targets.outputs.has_targets == 'true'
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/work" \
+            projectdiscovery/nuclei:latest \
+            -l /work/security-reports/targets.txt \
+            -severity low,medium,high,critical \
+            -o /work/security-reports/nuclei-results.txt
+
+      - name: Write no-targets notice
+        if: steps.targets.outputs.has_targets != 'true'
+        run: |
+          echo "No targets were configured for this profile." > security-reports/nuclei-results.txt
+
+      - name: Upload Nuclei artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuclei-results
+          path: security-reports/
