@@ -203,6 +203,12 @@ class RadarrCreditCache:
                 return float('inf')
             return time.time() - float(row[0])
 
+    @property
+    def entry_count(self):
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute('SELECT COUNT(*) FROM credits').fetchone()
+            return int(row[0]) if row else 0
+
     def build(self):
         """Build the credit cache from Radarr and Sonarr APIs. Call from a background thread."""
         if self._building:

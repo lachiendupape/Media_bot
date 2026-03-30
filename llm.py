@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import threading
 import time
 from openai import OpenAI
 from api.radarr import RadarrAPI, credit_cache
@@ -300,6 +301,13 @@ def search_by_person_handler(person_name: str, media_type: str = None, role: str
     if results is None:
         return "The credit search index is still being built. Please try again in a moment."
     if not results:
+        if credit_cache.entry_count == 0:
+            # Self-heal: if cache exists but has no rows, kick off a rebuild.
+            threading.Thread(target=credit_cache.build, daemon=True).start()
+            return (
+                "I could not find any credit data yet. I have started rebuilding the credit index "
+                "from Radarr/Sonarr in the background. Please try this search again in about a minute."
+            )
         scope = []
         if media_type:
             scope.append("movies" if media_type == "movie" else "TV series")
