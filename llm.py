@@ -207,7 +207,12 @@ def _is_owner(user_info):
     return user_info.get('username', '').lower() == owner
 
 
-def add_radarr_movie_handler(title: str) -> str:
+def add_radarr_movie_handler(
+    title: str,
+    state: dict = None,
+    preferred_tmdb_id: int = None,
+    preferred_year: int = None,
+) -> str:
     ok, msg = _check_disk_space()
     if not ok:
         return msg
@@ -216,8 +221,36 @@ def add_radarr_movie_handler(title: str) -> str:
     movies = radarr.lookup_movie(title)
     if not movies:
         return f"Could not find any movies matching '{title}'."
-    
-    selected_movie = movies[0]
+
+    selected_movie = None
+    if preferred_tmdb_id is not None:
+        selected_movie = next((m for m in movies if m.get('tmdbId') == preferred_tmdb_id), None)
+    elif preferred_year is not None:
+        selected_movie = next((m for m in movies if m.get('year') == preferred_year), None)
+
+    if selected_movie is None and len(movies) > 1 and preferred_tmdb_id is None:
+        options = movies[:10]
+        if state is not None:
+            state.pop('pending_series_pick', None)
+            state['pending_movie_add'] = {
+                'query': title,
+                'options': [
+                    {
+                        'title': m.get('title', '?'),
+                        'year': m.get('year'),
+                        'tmdbId': m.get('tmdbId'),
+                    }
+                    for m in options
+                ],
+            }
+        lines = [f"I found multiple movies matching '{title}'. Which version would you like to add?"]
+        for idx, m in enumerate(options, start=1):
+            lines.append(f"{idx}. {m.get('title', '?')} ({m.get('year', '?')})")
+        lines.append("Reply with the number (for example: 1).")
+        return "\n".join(lines)
+
+    if selected_movie is None:
+        selected_movie = movies[0]
     root_folder = radarr.get_root_folder()
     if not root_folder:
         return "Failed to retrieve Radarr root folder."
@@ -234,7 +267,13 @@ def add_radarr_movie_handler(title: str) -> str:
         return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
     return f"Failed to add movie '{selected_movie['title']}': {error}"
 
-def add_sonarr_series_handler(title: str, season: int = None, state: dict = None) -> str:
+def add_sonarr_series_handler(
+    title: str,
+    season: int = None,
+    state: dict = None,
+    preferred_tvdb_id: int = None,
+    preferred_year: int = None,
+) -> str:
     ok, msg = _check_disk_space()
     if not ok:
         return msg
@@ -243,8 +282,37 @@ def add_sonarr_series_handler(title: str, season: int = None, state: dict = None
     series = sonarr.lookup_series(title)
     if not series:
         return f"Could not find any series matching '{title}'."
-        
-    selected_series = series[0]
+
+    selected_series = None
+    if preferred_tvdb_id is not None:
+        selected_series = next((s for s in series if s.get('tvdbId') == preferred_tvdb_id), None)
+    elif preferred_year is not None:
+        selected_series = next((s for s in series if s.get('year') == preferred_year), None)
+
+    if selected_series is None and len(series) > 1 and preferred_tvdb_id is None and season is None:
+        options = series[:10]
+        if state is not None:
+            state.pop('pending_movie_add', None)
+            state['pending_series_pick'] = {
+                'query': title,
+                'options': [
+                    {
+                        'title': s.get('title', '?'),
+                        'year': s.get('year'),
+                        'tvdbId': s.get('tvdbId'),
+                    }
+                    for s in options
+                ],
+            }
+        lines = [f"I found multiple TV series matching '{title}'. Which one would you like to add?"]
+        for idx, s in enumerate(options, start=1):
+            lines.append(f"{idx}. {s.get('title', '?')} ({s.get('year', '?')})")
+        lines.append("Reply with the number (for example: 1).")
+        return "\n".join(lines)
+
+    if selected_series is None:
+        selected_series = series[0]
+
     seasons = [s for s in selected_series.get('seasons', []) if s['seasonNumber'] > 0]
 
     # No season specified — list available seasons and ask
@@ -255,6 +323,7 @@ def add_sonarr_series_handler(title: str, season: int = None, state: dict = None
             state['pending_series_add'] = {
                 'title': selected_series.get('title', title),
                 'year': selected_series.get('year'),
+                'tvdbId': selected_series.get('tvdbId'),
                 'available_seasons': sorted(s['seasonNumber'] for s in seasons),
             }
         season_list = ", ".join(str(s['seasonNumber']) for s in seasons)
@@ -468,6 +537,38 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None) ->
 
     trimmed = (user_message or '').strip()
 
+    # Pending movie disambiguation for add_radarr_movie flow.
+    pending_movie = state.get('pending_movie_add')
+    if pending_movie and trimmed.isdigit():
+        index = int(trimmed)
+        options = pending_movie.get('options', [])
+        if index < 1 or index > len(options):
+            return f"Please choose a number between 1 and {len(options)}."
+        picked = options[index - 1]
+        state.pop('pending_movie_add', None)
+        return add_radarr_movie_handler(
+            pending_movie.get('query', picked.get('title', '')),
+            state=state,
+            preferred_tmdb_id=picked.get('tmdbId'),
+            preferred_year=picked.get('year'),
+        )
+
+    # Pending series disambiguation for add_sonarr_series flow.
+    pending_series_pick = state.get('pending_series_pick')
+    if pending_series_pick and trimmed.isdigit():
+        index = int(trimmed)
+        options = pending_series_pick.get('options', [])
+        if index < 1 or index > len(options):
+            return f"Please choose a number between 1 and {len(options)}."
+        picked = options[index - 1]
+        state.pop('pending_series_pick', None)
+        return add_sonarr_series_handler(
+            pending_series_pick.get('query', picked.get('title', '')),
+            state=state,
+            preferred_tvdb_id=picked.get('tvdbId'),
+            preferred_year=picked.get('year'),
+        )
+
     # Pending season selection for add_sonarr_series flow.
     pending_series = state.get('pending_series_add')
     if pending_series:
@@ -484,6 +585,8 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None) ->
                 pending_series.get('title', ''),
                 season=season,
                 state=state,
+                preferred_tvdb_id=pending_series.get('tvdbId'),
+                preferred_year=pending_series.get('year'),
             )
 
     pending = state.get('pending_title_lookup')
@@ -851,7 +954,7 @@ def chat_with_llm(
                 
                 with start_span('llm.tool_execution', {'tool.name': function_name}):
                     if function_name == "add_radarr_movie":
-                        result = add_radarr_movie_handler(arguments.get("title"))
+                        result = add_radarr_movie_handler(arguments.get("title"), state=state)
                     elif function_name == "add_sonarr_series":
                         result = add_sonarr_series_handler(
                             arguments.get("title"),
