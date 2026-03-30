@@ -279,7 +279,23 @@ def add_sonarr_series_handler(title: str, season: int = None) -> str:
         return f"'{selected_series['title']} ({selected_series.get('year', '')})' is already in your library — no need to add it again!"
     return f"Failed to add TV series '{selected_series['title']}': {error}"
 
-def search_by_person_handler(person_name: str, media_type: str = None, role: str = None) -> str:
+def _format_person_results(results: list, display_name: str) -> str:
+    """Format a flat list of person credit results under a single display name."""
+    lines = [f"Results for '{display_name}' ({len(results)} title{'s' if len(results) != 1 else ''}):"]
+    for m in results:
+        status = "downloaded" if m['hasFile'] else "monitored"
+        label = "📺" if m['media_type'] == 'tv' else "🎬"
+        if m['role'] == 'director':
+            credit_info = "as Director"
+        else:
+            credit_info = f"as {m['character']}" if m.get('character') else ""
+        base = f"  {label} {m['title']} ({m['year']})"
+        credit_part = f" {credit_info}" if credit_info else ""
+        lines.append(f"{base}{credit_part} [{status}]")
+    return "\n".join(lines)
+
+
+def search_by_person_handler(person_name: str, media_type: str = None, role: str = None, state: dict = None) -> str:
     results = credit_cache.search(person_name, media_type=media_type, role=role)
     if results is None:
         return "The credit search index is still being built. Please try again in a moment."
@@ -296,9 +312,16 @@ def search_by_person_handler(person_name: str, media_type: str = None, role: str
     distinct_names = list(dict.fromkeys(m['person_name'] for m in results))
     multiple_people = len(distinct_names) > 1
 
+    # Store state so decade follow-ups can narrow down
+    if state is not None:
+        state['last_person_search'] = {
+            'query': person_name,
+            'results': results,
+            'distinct_names': distinct_names,
+        }
+
     if multiple_people:
-        # Group results by full name so user can identify who they meant
-        lines = [f"Found {len(distinct_names)} people matching '{person_name}' — please use a full name to narrow down:"]
+        lines = [f"Found {len(distinct_names)} people matching '{person_name}' — here they all are:"]
         for full_name in distinct_names:
             person_results = [m for m in results if m['person_name'] == full_name]
             lines.append(f"\n\u2022 {full_name} ({len(person_results)} title{'s' if len(person_results) != 1 else ''}):")
@@ -312,23 +335,12 @@ def search_by_person_handler(person_name: str, media_type: str = None, role: str
                 base = f"    {label} {m['title']} ({m['year']})"
                 credit_part = f" {credit_info}" if credit_info else ""
                 lines.append(f"{base}{credit_part} [{status}]")
-        lines.append(f"\nTry asking e.g. \"what has {distinct_names[0]} starred in\" for a specific person.")
+        lines.append(f"\nOnce you know the full name, just ask e.g. \"what has {distinct_names[0]} starred in\".")
         return "\n".join(lines)
 
-    # Single person — normal output using their full name from results
+    # Single person — show full name from results (fixes first-name-only follow-up)
     matched_name = distinct_names[0]
-    lines = [f"Results for '{matched_name}' ({len(results)} title{'s' if len(results) != 1 else ''}):"]
-    for m in results:
-        status = "downloaded" if m['hasFile'] else "monitored"
-        label = "📺" if m['media_type'] == 'tv' else "🎬"
-        if m['role'] == 'director':
-            credit_info = "as Director"
-        else:
-            credit_info = f"as {m['character']}" if m.get('character') else ""
-        base = f"  {label} {m['title']} ({m['year']})"
-        credit_part = f" {credit_info}" if credit_info else ""
-        lines.append(f"{base}{credit_part} [{status}]")
-    return "\n".join(lines)
+    return _format_person_results(results, matched_name)
 
 
 def search_title_credits_handler(title: str, media_type: str = None, role: str = None, state: dict = None) -> str:
@@ -541,9 +553,34 @@ def _normalize_title_phrase(text: str) -> str:
     return cleaned.strip()
 
 
+_DECADE_MAP = {
+    'eighties': (1980, 1989), '80s': (1980, 1989), '80\'s': (1980, 1989),
+    'nineties': (1990, 1999), '90s': (1990, 1999), '90\'s': (1990, 1999),
+    'seventies': (1970, 1979), '70s': (1970, 1979), '70\'s': (1970, 1979),
+    'sixties': (1960, 1969), '60s': (1960, 1969), '60\'s': (1960, 1969),
+    'two thousands': (2000, 2009), '2000s': (2000, 2009),
+    'two thousands ten': (2010, 2019), '2010s': (2010, 2019), 'tens': (2010, 2019),
+}
+
+
+def _detect_decade(text: str):
+    """Return (start_year, end_year) if a decade is mentioned, else None."""
+    lowered = text.lower()
+    # Match e.g. "in the 80s", "around the 80's", "1980s"
+    m = re.search(r'\b(19[0-9]0s|20[012][0-9]0s)\b', lowered)
+    if m:
+        start = int(m.group(1)[:4])
+        return (start, start + 9)
+    for key, span in _DECADE_MAP.items():
+        if key in lowered:
+            return span
+    return None
+
+
 def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
     lowered = (user_message or '').strip()
 
+    # --- Title credit lookups (who directed/starred in a specific title) ---
     director_match = re.match(r'^who\s+directed\s+(.+)$', lowered, flags=re.IGNORECASE)
     if director_match:
         title = _normalize_title_phrase(director_match.group(1))
@@ -559,6 +596,66 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
             if telemetry is not None:
                 telemetry['heuristic_route'] = 'search_title_credits:actor'
             return search_title_credits_handler(title, role='actor', state=state)
+
+    # --- Person filmography lookups (what does X star in / list all Xs) ---
+    # Use separate non-greedy patterns so the name doesn't swallow the trailing verb.
+    _PERSON_PATTERNS = [
+        # "what does/has/did [name] star/starred in"
+        re.compile(r'^what\s+(?:has|did|does)\s+(.+?)\s+(?:star(?:red|s)?(?:\s+in)?|been\s+in|appear(?:ed|s)?(?:\s+in)?|acted\s+in)\??$', re.IGNORECASE),
+        # "list/show/find all [name]s" or "list [name]"
+        re.compile(r'^(?:list|show|find)\s+(?:all\s+|me\s+all\s+)?(.+?)(?:[\'\'s]*)?\??$', re.IGNORECASE),
+        # "movies with [name]" / "movies starring [name]"
+        re.compile(r'^(?:what\s+)?movies?\s+(?:with|starring)\s+(.+?)\??$', re.IGNORECASE),
+        # "shows with [name]" / "shows starring [name]"
+        re.compile(r'^(?:what\s+)?(?:tv\s+)?shows?\s+(?:with|starring)\s+(.+?)\??$', re.IGNORECASE),
+    ]
+    for pat in _PERSON_PATTERNS:
+        pm = pat.match(lowered)
+        if pm:
+            name = pm.group(1).strip(" '\u2019s").strip()
+            # Guard: skip if the extracted name looks like a command keyword rather than a real name
+            if name and len(name) >= 2 and not re.search(
+                r'^\s*(?:add|delete|remove|find|search|list|show|movies?|shows?|series|all)\s*$',
+                name, re.IGNORECASE
+            ):
+                if telemetry is not None:
+                    telemetry['heuristic_route'] = 'search_by_person:actor'
+                return search_by_person_handler(name, role='actor', state=state)
+
+    # --- Decade follow-up: "around in the 80s" / "in the 90s" when we have a recent person search ---
+    decade = _detect_decade(lowered)
+    if decade and state is not None:
+        last = state.get('last_person_search')
+        if last:
+            start_yr, end_yr = decade
+            filtered = [m for m in last['results'] if m.get('year') and start_yr <= m['year'] <= end_yr]
+            if not filtered:
+                return (
+                    f"No titles from the {decade[0]}s found for '{last['query']}' in your library. "
+                    f"Try a different decade or check the full list above."
+                )
+            distinct_filtered = list(dict.fromkeys(m['person_name'] for m in filtered))
+            if len(distinct_filtered) == 1:
+                # Decade narrowed it to one person
+                name = distinct_filtered[0]
+                state['last_person_search']['results'] = filtered
+                state['last_person_search']['distinct_names'] = distinct_filtered
+                if telemetry is not None:
+                    telemetry['heuristic_route'] = 'decade_filter'
+                return _format_person_results(filtered, name)
+            else:
+                # Still multiple — show filtered grouped list
+                lines = [f"People matching '{last['query']}' with titles from the {start_yr}s–{end_yr}s:"]
+                for full_name in distinct_filtered:
+                    person_results = [m for m in filtered if m['person_name'] == full_name]
+                    lines.append(f"\n\u2022 {full_name} ({len(person_results)} title{'s' if len(person_results) != 1 else ''} in that decade):")
+                    for m in person_results:
+                        label = "📺" if m['media_type'] == 'tv' else "🎬"
+                        lines.append(f"    {label} {m['title']} ({m['year']})")
+                lines.append(f"\nTry using a full name, e.g. \"what has {distinct_filtered[0]} starred in\".")
+                if telemetry is not None:
+                    telemetry['heuristic_route'] = 'decade_filter_ambiguous'
+                return "\n".join(lines)
 
     return None
 
@@ -609,10 +706,15 @@ def chat_with_llm(
                 "- When the user replies with a season number for a show you already looked up, "
                 "call add_sonarr_series again WITH the season parameter.\n"
                 "- When the user asks what movies or shows star a particular ACTOR or ACTRESS, "
-                "call search_by_person with role='actor'. Set media_type='movie' for movies only, "
-                "'tv' for TV only, or omit for both.\n"
-                "- When the user asks what movies or shows a DIRECTOR directed, call search_by_person "
-                "with role='director'. Set media_type='movie' or 'tv' as appropriate.\n"
+                "IMMEDIATELY call search_by_person with role='actor' — even if the name is partial "
+                "or ambiguous. NEVER ask for clarification first; the tool handles partial names "
+                "automatically and will group results by full name if needed. "
+                "Set media_type='movie' for movies only, 'tv' for TV only, or omit for both.\n"
+                "- When the user asks what movies or shows a DIRECTOR directed, IMMEDIATELY call "
+                "search_by_person with role='director' — even for partial names. Never ask for "
+                "clarification before calling the tool.\n"
+                "- If the user asks to 'list all' people with a given name, call search_by_person "
+                "with that name — the tool will show all matching people grouped by full name.\n"
                 "- When the user asks WHO STARRED IN, WHO ACTS IN, WHO IS IN, or WHO DIRECTED a "
                 "specific movie or TV title, call search_title_credits with title set to that title. "
                 "Set role='actor' for cast questions and role='director' for director questions.\n"
@@ -674,6 +776,7 @@ def chat_with_llm(
                     elif function_name == "search_by_person":
                         result = search_by_person_handler(
                             arguments.get("person_name"),
+                            state=state,
                             media_type=arguments.get("media_type"),
                             role=arguments.get("role"),
                         )
