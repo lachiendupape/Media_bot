@@ -220,12 +220,15 @@ _STYLE_KEYWORDS: dict[str, str] = {
     "excited": "enthusiastic",
 }
 
+# Pattern matching any known style keyword (escaped and joined for regex use).
+_STYLE_KEYWORD_PATTERN = "|".join(re.escape(word) for word in _STYLE_KEYWORDS)
 
 # Pre-compiled patterns used by _detect_style_command.
 _STYLE_RESET_PATTERNS = [
     re.compile(r"\b(?:stop|disable|reset|turn\s+off)\s+(?:the\s+)?(?:\w+\s+)?(?:mode|style|voice)\b"),
     re.compile(r"\b(?:normal|default|regular)\s+(?:mode|style|voice)\b"),
-    re.compile(r"\bstop\s+being\b"),
+    # Only treat "stop being ..." as a style reset when followed by a known style keyword.
+    re.compile(rf"\bstop\s+being\s+(?:so\s+)?(?:{_STYLE_KEYWORD_PATTERN})\b"),
     re.compile(r"\breturn\s+to\s+normal\b"),
     re.compile(r"\bno\s+more\s+styles?\b"),
 ]
