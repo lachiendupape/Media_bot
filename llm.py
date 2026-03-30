@@ -592,6 +592,26 @@ def _detect_decade(text: str):
     return None
 
 
+def _infer_media_type_from_query(text: str) -> str | None:
+    """Infer media type intent from user wording.
+
+    Returns:
+        'movie' when query clearly asks for movies only
+        'tv' when query clearly asks for TV/shows only
+        None when query is generic and should include both
+    """
+    lowered = (text or '').lower()
+
+    asks_movies = bool(re.search(r'\b(movie|movies|film|films)\b', lowered))
+    asks_tv = bool(re.search(r'\b(tv|television|show|shows|series)\b', lowered))
+
+    if asks_movies and not asks_tv:
+        return 'movie'
+    if asks_tv and not asks_movies:
+        return 'tv'
+    return None
+
+
 def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
     lowered = (user_message or '').strip()
 
@@ -624,7 +644,7 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
         # "shows with [name]" / "shows starring [name]"
         re.compile(r'^(?:what\s+)?(?:tv\s+)?shows?\s+(?:with|starring)\s+(.+?)\??$', re.IGNORECASE),
     ]
-    for pat in _PERSON_PATTERNS:
+    for idx, pat in enumerate(_PERSON_PATTERNS):
         pm = pat.match(lowered)
         if pm:
             name = pm.group(1).strip(" '\u2019s").strip()
@@ -635,7 +655,12 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
             ):
                 if telemetry is not None:
                     telemetry['heuristic_route'] = 'search_by_person:actor'
-                return search_by_person_handler(name, role='actor', state=state)
+                media_type = None
+                if idx == 2:
+                    media_type = 'movie'
+                elif idx == 3:
+                    media_type = 'tv'
+                return search_by_person_handler(name, media_type=media_type, role='actor', state=state)
 
     # --- Decade follow-up: "around in the 80s" / "in the 90s" when we have a recent person search ---
     decade = _detect_decade(lowered)
@@ -724,7 +749,8 @@ def chat_with_llm(
                 "IMMEDIATELY call search_by_person with role='actor' — even if the name is partial "
                 "or ambiguous. NEVER ask for clarification first; the tool handles partial names "
                 "automatically and will group results by full name if needed. "
-                "Set media_type='movie' for movies only, 'tv' for TV only, or omit for both.\n"
+                "Set media_type='movie' for movies only, 'tv' for TV only, or omit for both. "
+                "For generic phrasing like 'what has X starred in', omit media_type so both are returned.\n"
                 "- When the user asks what movies or shows a DIRECTOR directed, IMMEDIATELY call "
                 "search_by_person with role='director' — even for partial names. Never ask for "
                 "clarification before calling the tool.\n"
@@ -789,10 +815,18 @@ def chat_with_llm(
                     elif function_name == "add_sonarr_series":
                         result = add_sonarr_series_handler(arguments.get("title"), season=arguments.get("season"))
                     elif function_name == "search_by_person":
+                        requested_media_type = arguments.get("media_type")
+                        inferred_media_type = _infer_media_type_from_query(user_message)
+                        # If user did not explicitly ask for only movies or only TV,
+                        # search both by forcing media_type=None.
+                        effective_media_type = inferred_media_type if inferred_media_type is not None else requested_media_type
+                        if inferred_media_type is None:
+                            effective_media_type = None
+
                         result = search_by_person_handler(
                             arguments.get("person_name"),
                             state=state,
-                            media_type=arguments.get("media_type"),
+                            media_type=effective_media_type,
                             role=arguments.get("role"),
                         )
                     elif function_name == "search_title_credits":
