@@ -1,21 +1,4 @@
 # Copy this file to scripts/security/targets-prod.txt for local real targets.
 # Keep scripts/security/targets-prod.txt untracked (gitignored).
 
-https://gotify.example.com
-https://heimdall.example.com
-https://hydra2.example.com
-https://igotify.example.com
-https://lidarr.example.com
-https://mail.example.com
-https://mediabot.example.com
-https://navidrome.example.com
-https://ntfy.example.com
-https://nzbget.example.com
-https://ombi.example.com
-https://prowlarr.example.com
-https://radarr.example.com
-https://radio.example.com
-https://sabnzbd.example.com
-https://sonarr.example.com
-https://tautulli.example.com
-https://uptimekuma.example.com
+https://app.example.com
