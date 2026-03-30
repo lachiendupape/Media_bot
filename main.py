@@ -122,7 +122,9 @@ def chat():
     try:
         log.info("Received message: %s", user_message)
         user_info = session.get('plex_user')
-        response_text = chat_with_llm(user_message, user_info=user_info)
+        chat_state = session.get('chat_state', {})
+        response_text = chat_with_llm(user_message, user_info=user_info, state=chat_state)
+        session['chat_state'] = chat_state
         log.info("Bot response: %s", response_text[:200])
         return jsonify({"response": response_text})
     except Exception:

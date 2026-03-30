@@ -8,6 +8,7 @@ A natural-language media library assistant that lets you search and manage your 
 - **Add TV series by season** -- searches Sonarr, lists available seasons, and lets you pick which to grab.
 - **Search by person** -- queries a local credit cache to find movies and TV series by actor or director name, with optional filters for media type and role.
 - **Reverse title lookup** -- ask who starred in or directed a specific movie/TV title in your library.
+- **Fast disambiguation replies** -- if multiple close title matches are found, reply with `1`, `2`, `3`, etc. to choose.
 - **Delete media (owner only)** -- the Plex server owner can remove movies or TV series (with file deletion) through the chat.
 - **Disk space guard** -- blocks new downloads when any disk drops below 5% free space.
 - **Plex OAuth login** -- browser-based sign-in using your Plex account; only users with access to your server can use the bot.

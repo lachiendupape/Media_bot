@@ -305,7 +305,7 @@ def search_by_person_handler(person_name: str, media_type: str = None, role: str
     return "\n".join(lines)
 
 
-def search_title_credits_handler(title: str, media_type: str = None, role: str = None) -> str:
+def search_title_credits_handler(title: str, media_type: str = None, role: str = None, state: dict = None) -> str:
     results = credit_cache.search_title_credits(title, media_type=media_type, role=role)
     if results is None:
         return "The credit search index is still being built. Please try again in a moment."
@@ -318,6 +318,15 @@ def search_title_credits_handler(title: str, media_type: str = None, role: str =
         scope_str = " ".join(scope) if scope else "the library"
         return f"No results for '{title}' found in {scope_str}."
 
+    return _format_title_credits_results(results, title=title, role=role, state=state)
+
+
+def _format_title_credits_results(results, title: str = None, role: str = None, state: dict = None) -> str:
+    """Format title credit rows and optionally populate disambiguation state."""
+    if not results:
+        query_title = title or "that title"
+        return f"No results for '{query_title}' found in the library."
+
     # Group by matching title and format directors + cast for each matched title.
     grouped = {}
     for r in results:
@@ -325,17 +334,33 @@ def search_title_credits_handler(title: str, media_type: str = None, role: str =
         grouped.setdefault(key, []).append(r)
 
     # If partial matching found multiple distinct titles, ask the user to disambiguate.
-    normalized_query = title.strip().lower()
+    normalized_query = title.strip().lower() if title else ""
     exact_title_matches = [k for k in grouped if k[0].strip().lower() == normalized_query]
     if len(grouped) > 1 and not exact_title_matches:
+        ordered_options = sorted(grouped.keys(), key=lambda x: (x[0].lower(), x[1] or 0, x[2]))
         options = []
-        for matched_title, year, kind in sorted(grouped.keys(), key=lambda x: (x[0].lower(), x[1] or 0, x[2])):
+        for idx, (matched_title, year, kind) in enumerate(ordered_options, start=1):
             label = "Movie" if kind == 'movie' else "TV"
-            options.append(f"- {matched_title} ({year}) [{label}]")
+            options.append(f"{idx}. {matched_title} ({year}) [{label}]")
+
+        if state is not None:
+            state['pending_title_lookup'] = {
+                'options': [
+                    {'title': t, 'year': y, 'media_type': k}
+                    for (t, y, k) in ordered_options
+                ],
+                'role': role,
+                'query_title': title,
+            }
+
         return (
             f"I found multiple titles similar to '{title}'. Which one did you mean?\n"
             + "\n".join(options[:10])
+            + "\nReply with the number (for example: 1)."
         )
+
+    if state is not None:
+        state.pop('pending_title_lookup', None)
 
     lines = []
     for (matched_title, year, kind), credits in grouped.items():
@@ -372,6 +397,49 @@ def search_title_credits_handler(title: str, media_type: str = None, role: str =
         lines.append("")
 
     return "\n".join(lines).strip()
+
+
+def _resolve_pending_numeric_selection(user_message: str, state: dict = None) -> str | None:
+    """Resolve numeric replies (e.g. '2') against stored disambiguation options."""
+    if state is None:
+        return None
+    pending = state.get('pending_title_lookup')
+    if not pending:
+        return None
+
+    trimmed = (user_message or '').strip()
+    if not trimmed.isdigit():
+        return None
+
+    index = int(trimmed)
+    options = pending.get('options', [])
+    if index < 1 or index > len(options):
+        return f"Please choose a number between 1 and {len(options)}."
+
+    picked = options[index - 1]
+    results = credit_cache.search_title_credits(
+        picked['title'],
+        media_type=picked.get('media_type'),
+        role=pending.get('role'),
+    )
+    if results is None:
+        return "The credit search index is still being built. Please try again in a moment."
+
+    # Narrow to the exact selected title/type/year.
+    filtered = [
+        r for r in results
+        if r.get('title') == picked.get('title')
+        and r.get('media_type') == picked.get('media_type')
+        and r.get('year') == picked.get('year')
+    ]
+
+    state.pop('pending_title_lookup', None)
+    return _format_title_credits_results(
+        filtered,
+        title=picked.get('title'),
+        role=pending.get('role'),
+        state=state,
+    )
 
 
 def delete_movie_handler(title: str, delete_files: bool = True, user_info: dict = None) -> str:
@@ -441,10 +509,14 @@ def _parse_tool_call_from_text(text):
     return FakeToolCall(name, args)
 
 
-def chat_with_llm(user_message: str, user_info: dict = None) -> str:
+def chat_with_llm(user_message: str, user_info: dict = None, state: dict = None) -> str:
     """Send a user message to the NeMo Claw model and handle tool calls."""
     if not client:
         return "AI Client is not initialized."
+
+    numeric_selection_result = _resolve_pending_numeric_selection(user_message, state=state)
+    if numeric_selection_result is not None:
+        return numeric_selection_result
 
     messages = [
         {
@@ -470,6 +542,8 @@ def chat_with_llm(user_message: str, user_info: dict = None) -> str:
                 "- When the user asks WHO STARRED IN, WHO ACTS IN, WHO IS IN, or WHO DIRECTED a "
                 "specific movie or TV title, call search_title_credits with title set to that title. "
                 "Set role='actor' for cast questions and role='director' for director questions.\n"
+                "- If you ask the user to choose between multiple title matches, and they reply with "
+                "just a number (like 1, 2, or 3), treat that as their selection.\n"
                 "- When the user asks to DELETE or REMOVE a MOVIE, call delete_movie.\n"
                 "- When the user asks to DELETE or REMOVE a TV SERIES or TV SHOW, call delete_tv_series.\n"
                 "- For general questions, respond directly without calling any tools.\n"
@@ -520,6 +594,7 @@ def chat_with_llm(user_message: str, user_info: dict = None) -> str:
                         arguments.get("title"),
                         media_type=arguments.get("media_type"),
                         role=arguments.get("role"),
+                        state=state,
                     )
                 elif function_name == "delete_movie":
                     result = delete_movie_handler(
