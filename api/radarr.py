@@ -348,6 +348,7 @@ class RadarrCreditCache:
                 {
                     'title': r['title'],
                     'year': r['year'],
+                    'person_name': r['person_name'],
                     'character': r['character'],
                     'hasFile': bool(r['has_file']),
                     'media_type': r['media_type'],

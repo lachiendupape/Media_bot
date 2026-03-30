@@ -306,6 +306,8 @@ def index():
         'chat.html',
         user=session['plex_user'],
         app_version=config.APP_VERSION,
+        flask_env=os.getenv('FLASK_ENV', 'development'),
+        plex_server_name=config.PLEX_APP_NAME,
         github_issue_enabled=config.GITHUB_ISSUES_ENABLED,
     )
 

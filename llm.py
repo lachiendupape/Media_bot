@@ -292,8 +292,32 @@ def search_by_person_handler(person_name: str, media_type: str = None, role: str
         scope_str = " ".join(scope) if scope else "the library"
         return f"No results for '{person_name}' found in {scope_str}."
 
-    # Group output by media type for readability
-    lines = [f"Results for '{person_name}' ({len(results)} title{'s' if len(results) != 1 else ''}):"]
+    # Detect partial/first-name match: multiple distinct full names returned
+    distinct_names = list(dict.fromkeys(m['person_name'] for m in results))
+    multiple_people = len(distinct_names) > 1
+
+    if multiple_people:
+        # Group results by full name so user can identify who they meant
+        lines = [f"Found {len(distinct_names)} people matching '{person_name}' — please use a full name to narrow down:"]
+        for full_name in distinct_names:
+            person_results = [m for m in results if m['person_name'] == full_name]
+            lines.append(f"\n\u2022 {full_name} ({len(person_results)} title{'s' if len(person_results) != 1 else ''}):")
+            for m in person_results:
+                status = "downloaded" if m['hasFile'] else "monitored"
+                label = "📺" if m['media_type'] == 'tv' else "🎬"
+                if m['role'] == 'director':
+                    credit_info = "as Director"
+                else:
+                    credit_info = f"as {m['character']}" if m.get('character') else ""
+                base = f"    {label} {m['title']} ({m['year']})"
+                credit_part = f" {credit_info}" if credit_info else ""
+                lines.append(f"{base}{credit_part} [{status}]")
+        lines.append(f"\nTry asking e.g. \"what has {distinct_names[0]} starred in\" for a specific person.")
+        return "\n".join(lines)
+
+    # Single person — normal output using their full name from results
+    matched_name = distinct_names[0]
+    lines = [f"Results for '{matched_name}' ({len(results)} title{'s' if len(results) != 1 else ''}):"]
     for m in results:
         status = "downloaded" if m['hasFile'] else "monitored"
         label = "📺" if m['media_type'] == 'tv' else "🎬"
