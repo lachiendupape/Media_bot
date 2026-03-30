@@ -1,10 +1,12 @@
 import json
 import logging
 import re
+import time
 from openai import OpenAI
 from api.radarr import RadarrAPI, credit_cache
 from api.sonarr import SonarrAPI
 import config
+from observability import redact_sensitive_fields, start_span
 
 log = logging.getLogger(__name__)
 
@@ -509,14 +511,62 @@ def _parse_tool_call_from_text(text):
     return FakeToolCall(name, args)
 
 
-def chat_with_llm(user_message: str, user_info: dict = None, state: dict = None) -> str:
+def _normalize_title_phrase(text: str) -> str:
+    cleaned = text.strip().rstrip('?.! ')
+    cleaned = re.sub(r'^(the\s+)?(movie|film|show|tv show|tv series|series)\s+', '', cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
+def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
+    lowered = (user_message or '').strip()
+
+    director_match = re.match(r'^who\s+directed\s+(.+)$', lowered, flags=re.IGNORECASE)
+    if director_match:
+        title = _normalize_title_phrase(director_match.group(1))
+        if title:
+            if telemetry is not None:
+                telemetry['heuristic_route'] = 'search_title_credits:director'
+            return search_title_credits_handler(title, role='director', state=state)
+
+    actor_match = re.match(r'^who\s+(?:starred|stars|acted|acts|is)\s+in\s+(.+)$', lowered, flags=re.IGNORECASE)
+    if actor_match:
+        title = _normalize_title_phrase(actor_match.group(1))
+        if title:
+            if telemetry is not None:
+                telemetry['heuristic_route'] = 'search_title_credits:actor'
+            return search_title_credits_handler(title, role='actor', state=state)
+
+    return None
+
+
+def chat_with_llm(
+    user_message: str,
+    user_info: dict = None,
+    state: dict = None,
+    request_id: str = None,
+    telemetry: dict = None,
+) -> str:
     """Send a user message to the NeMo Claw model and handle tool calls."""
     if not client:
         return "AI Client is not initialized."
 
+    telemetry = telemetry if telemetry is not None else {}
+    telemetry.update({
+        'model': config.OLLAMA_MODEL,
+        'fallback_tool_parser': False,
+        'tool_calls': [],
+        'numeric_selection': False,
+        'request_id': request_id,
+    })
+
     numeric_selection_result = _resolve_pending_numeric_selection(user_message, state=state)
     if numeric_selection_result is not None:
+        telemetry['numeric_selection'] = True
         return numeric_selection_result
+
+    heuristic_result = _try_rule_based_route(user_message, state=state, telemetry=telemetry)
+    if heuristic_result is not None:
+        return heuristic_result
 
     messages = [
         {
@@ -554,11 +604,14 @@ def chat_with_llm(user_message: str, user_info: dict = None, state: dict = None)
     ]
 
     try:
-        response = client.chat.completions.create(
-            model=config.OLLAMA_MODEL, 
-            messages=messages,
-            tools=tools
-        )
+        llm_started = time.perf_counter()
+        with start_span('llm.chat_completion', {'model': config.OLLAMA_MODEL}):
+            response = client.chat.completions.create(
+                model=config.OLLAMA_MODEL,
+                messages=messages,
+                tools=tools
+            )
+        telemetry['llm_duration_ms'] = round((time.perf_counter() - llm_started) * 1000, 2)
         
         response_message = response.choices[0].message
         
@@ -570,56 +623,82 @@ def chat_with_llm(user_message: str, user_info: dict = None, state: dict = None)
             parsed = _parse_tool_call_from_text(response_message.content)
             if parsed:
                 tool_calls = [parsed]
+                telemetry['fallback_tool_parser'] = True
 
         if tool_calls:
             results = []
             for tool_call in tool_calls:
                 function_name = tool_call.function.name
                 arguments = json.loads(tool_call.function.arguments)
+                safe_arguments = redact_sensitive_fields(arguments)
+                tool_started = time.perf_counter()
                 
-                print(f"LLM called tool: {function_name} with args: {arguments}", flush=True)
+                log.info(
+                    'llm.tool_call',
+                    extra={
+                        'tool_name': function_name,
+                        'tool_arguments': safe_arguments,
+                        'request_id': request_id,
+                    },
+                )
                 
-                if function_name == "add_radarr_movie":
-                    result = add_radarr_movie_handler(arguments.get("title"))
-                elif function_name == "add_sonarr_series":
-                    result = add_sonarr_series_handler(arguments.get("title"), season=arguments.get("season"))
-                elif function_name == "search_by_person":
-                    result = search_by_person_handler(
-                        arguments.get("person_name"),
-                        media_type=arguments.get("media_type"),
-                        role=arguments.get("role"),
-                    )
-                elif function_name == "search_title_credits":
-                    result = search_title_credits_handler(
-                        arguments.get("title"),
-                        media_type=arguments.get("media_type"),
-                        role=arguments.get("role"),
-                        state=state,
-                    )
-                elif function_name == "delete_movie":
-                    result = delete_movie_handler(
-                        arguments.get("title"),
-                        delete_files=arguments.get("delete_files", True),
-                        user_info=user_info,
-                    )
-                elif function_name == "delete_tv_series":
-                    result = delete_tv_series_handler(
-                        arguments.get("title"),
-                        delete_files=arguments.get("delete_files", True),
-                        user_info=user_info,
-                    )
-                else:
-                    result = f"Unknown function: {function_name}"
-                
-                print(f"Tool result: {result}", flush=True)
+                with start_span('llm.tool_execution', {'tool.name': function_name}):
+                    if function_name == "add_radarr_movie":
+                        result = add_radarr_movie_handler(arguments.get("title"))
+                    elif function_name == "add_sonarr_series":
+                        result = add_sonarr_series_handler(arguments.get("title"), season=arguments.get("season"))
+                    elif function_name == "search_by_person":
+                        result = search_by_person_handler(
+                            arguments.get("person_name"),
+                            media_type=arguments.get("media_type"),
+                            role=arguments.get("role"),
+                        )
+                    elif function_name == "search_title_credits":
+                        result = search_title_credits_handler(
+                            arguments.get("title"),
+                            media_type=arguments.get("media_type"),
+                            role=arguments.get("role"),
+                            state=state,
+                        )
+                    elif function_name == "delete_movie":
+                        result = delete_movie_handler(
+                            arguments.get("title"),
+                            delete_files=arguments.get("delete_files", True),
+                            user_info=user_info,
+                        )
+                    elif function_name == "delete_tv_series":
+                        result = delete_tv_series_handler(
+                            arguments.get("title"),
+                            delete_files=arguments.get("delete_files", True),
+                            user_info=user_info,
+                        )
+                    else:
+                        result = f"Unknown function: {function_name}"
+
+                duration_ms = round((time.perf_counter() - tool_started) * 1000, 2)
+                telemetry['tool_calls'].append({
+                    'name': function_name,
+                    'arguments': safe_arguments,
+                    'duration_ms': duration_ms,
+                })
+                log.info(
+                    'llm.tool_result',
+                    extra={
+                        'tool_name': function_name,
+                        'duration_ms': duration_ms,
+                        'result_preview': result[:200],
+                        'request_id': request_id,
+                    },
+                )
                 results.append(result)
             
             # Return the handler results directly - they're already human-readable
             return "\n".join(results)
         else:
+            telemetry['direct_response'] = True
             return response_message.content
 
-    except Exception as e:
-        log.exception("Error in chat_with_llm")
+    except Exception:
+        log.exception("Error in chat_with_llm", extra={'request_id': request_id})
         return "Something went wrong while processing your request. Please try again."
 

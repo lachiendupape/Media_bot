@@ -40,6 +40,21 @@
         }
         header a:hover { color: #e0e0e0; }
         h1 { font-size: 18px; color: #fff; }
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .header-btn {
+            padding: 8px 12px;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .header-btn:hover { border-color: #e5a00d; color: #fff; }
         .chat-area {
             flex: 1;
             overflow-y: auto;
@@ -106,6 +121,78 @@
             font-style: italic;
             padding: 8px 16px;
         }
+        .request-meta {
+            font-size: 12px;
+            color: #8899aa;
+            margin-top: 8px;
+        }
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(6, 10, 20, 0.76);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+        }
+        .modal-backdrop.open { display: flex; }
+        .modal {
+            width: min(720px, 100%);
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 16px;
+            padding: 20px;
+        }
+        .modal h2 {
+            margin-bottom: 12px;
+            font-size: 20px;
+        }
+        .modal p {
+            color: #a9b3c1;
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+        .modal label {
+            display: block;
+            margin: 12px 0 6px;
+            font-size: 14px;
+            color: #d8dee8;
+        }
+        .modal textarea,
+        .modal input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid #0f3460;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font: inherit;
+        }
+        .modal textarea { min-height: 110px; resize: vertical; }
+        .modal .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 12px;
+            font-size: 14px;
+            color: #c9d2de;
+        }
+        .modal .actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 18px;
+        }
+        .modal .secondary {
+            background: transparent;
+            color: #c9d2de;
+            border: 1px solid #38506a;
+        }
+        .report-status {
+            margin-top: 12px;
+            font-size: 13px;
+            color: #9fd3a8;
+        }
     </style>
 </head>
 <body>
@@ -114,7 +201,11 @@
         <div class="info">
             {% if user.thumb %}<img src="{{ user.thumb }}" alt="">{% endif %}
             <span class="username">{{ user.username }}</span>
-            <a href="/auth/logout">Sign out</a>
+            <div class="header-actions">
+                <button class="header-btn" id="reportBugBtn" type="button">Report issue</button>
+                <span class="request-meta">Version {{ app_version }}</span>
+                <a href="/auth/logout">Sign out</a>
+            </div>
         </div>
     </header>
     <div class="chat-area" id="chatArea">
@@ -124,10 +215,51 @@
         <input type="text" id="msgInput" placeholder="e.g. Add the movie Sinners to Radarr..." autocomplete="off">
         <button id="sendBtn">Send</button>
     </div>
+    <div class="modal-backdrop" id="bugModal">
+        <div class="modal">
+            <h2>Report an issue</h2>
+            <p>This sends your note with the last request ID and optional debug context so the failure is easier to trace.</p>
+            <div class="request-meta" id="bugContextSummary">No recent request yet.</div>
+            <label for="bugDescription">What went wrong?</label>
+            <textarea id="bugDescription" placeholder="Describe the issue you saw..."></textarea>
+            <label for="bugExpected">What did you expect instead?</label>
+            <input type="text" id="bugExpected" placeholder="Expected behaviour (optional)">
+            <label for="bugLastPrompt">Last prompt</label>
+            <textarea id="bugLastPrompt" readonly></textarea>
+            <label for="bugLastResponse">Last response</label>
+            <textarea id="bugLastResponse" readonly></textarea>
+            <label class="checkbox-row"><input type="checkbox" id="bugIncludeDebug" checked> Include debug metadata (request ID, model, tool usage)</label>
+            <label class="checkbox-row"><input type="checkbox" id="bugCreateGitHubIssue" {% if github_issue_enabled %}checked{% endif %} {% if not github_issue_enabled %}disabled{% endif %}> Also create a GitHub issue{% if not github_issue_enabled %} (not configured){% endif %}</label>
+            <div class="actions">
+                <button class="header-btn secondary" id="cancelBugBtn" type="button">Cancel</button>
+                <button class="header-btn" id="submitBugBtn" type="button">Send report</button>
+            </div>
+            <div class="report-status" id="bugStatus"></div>
+        </div>
+    </div>
     <script>
         const chatArea = document.getElementById('chatArea');
         const input = document.getElementById('msgInput');
         const btn = document.getElementById('sendBtn');
+        const reportBugBtn = document.getElementById('reportBugBtn');
+        const bugModal = document.getElementById('bugModal');
+        const cancelBugBtn = document.getElementById('cancelBugBtn');
+        const submitBugBtn = document.getElementById('submitBugBtn');
+        const bugDescription = document.getElementById('bugDescription');
+        const bugExpected = document.getElementById('bugExpected');
+        const bugLastPrompt = document.getElementById('bugLastPrompt');
+        const bugLastResponse = document.getElementById('bugLastResponse');
+        const bugIncludeDebug = document.getElementById('bugIncludeDebug');
+        const bugCreateGitHubIssue = document.getElementById('bugCreateGitHubIssue');
+        const bugStatus = document.getElementById('bugStatus');
+        const bugContextSummary = document.getElementById('bugContextSummary');
+
+        let lastInteraction = {
+            requestId: '',
+            prompt: '',
+            response: '',
+            version: '{{ app_version }}',
+        };
 
         function addMsg(text, cls) {
             const el = document.createElement('div');
@@ -136,6 +268,69 @@
             chatArea.appendChild(el);
             chatArea.scrollTop = chatArea.scrollHeight;
             return el;
+        }
+
+        function updateBugContext() {
+            bugLastPrompt.value = lastInteraction.prompt || '';
+            bugLastResponse.value = lastInteraction.response || '';
+            bugContextSummary.textContent = lastInteraction.requestId
+                ? `Last request: ${lastInteraction.requestId} | Version ${lastInteraction.version}`
+                : 'No recent request yet.';
+        }
+
+        function openBugModal() {
+            updateBugContext();
+            bugStatus.textContent = '';
+            bugModal.classList.add('open');
+        }
+
+        function closeBugModal() {
+            bugModal.classList.remove('open');
+        }
+
+        async function submitBugReport() {
+            const description = bugDescription.value.trim();
+            if (!description) {
+                bugStatus.textContent = 'Please describe the issue before sending.';
+                return;
+            }
+
+            submitBugBtn.disabled = true;
+            bugStatus.textContent = 'Sending report...';
+
+            try {
+                const res = await fetch('/bug-report', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        request_id: lastInteraction.requestId,
+                        description,
+                        expected: bugExpected.value.trim(),
+                        include_debug_context: bugIncludeDebug.checked,
+                        create_github_issue: bugCreateGitHubIssue.checked,
+                    }),
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    bugStatus.textContent = data.error || 'Could not send the report.';
+                    return;
+                }
+
+                if (data.github_issue && data.github_issue.url) {
+                    bugStatus.innerHTML = `Report saved with request ID ${data.request_id}. GitHub issue created: <a href="${data.github_issue.url}" target="_blank" rel="noopener noreferrer">#${data.github_issue.number}</a>`;
+                } else if (bugCreateGitHubIssue.checked && data.github_issue_error) {
+                    bugStatus.textContent = `Report saved with request ID ${data.request_id}, but GitHub issue creation failed: ${data.github_issue_error}`;
+                } else {
+                    bugStatus.textContent = `Report saved with request ID ${data.request_id}.`;
+                }
+                bugDescription.value = '';
+                bugExpected.value = '';
+                setTimeout(closeBugModal, 900);
+            } catch (error) {
+                bugStatus.textContent = 'Could not send the report. Please try again.';
+            } finally {
+                submitBugBtn.disabled = false;
+            }
         }
 
         async function send() {
@@ -165,8 +360,20 @@
                 }
                 if (data.error) {
                     addMsg('Error: ' + data.error, 'bot error');
+                    lastInteraction = {
+                        requestId: data.request_id || res.headers.get('X-Request-ID') || '',
+                        prompt: text,
+                        response: data.error,
+                        version: lastInteraction.version,
+                    };
                 } else {
                     addMsg(data.response, 'bot');
+                    lastInteraction = {
+                        requestId: data.request_id || res.headers.get('X-Request-ID') || '',
+                        prompt: text,
+                        response: data.response,
+                        version: data.version || lastInteraction.version,
+                    };
                 }
             } catch (e) {
                 typing.remove();
@@ -178,6 +385,12 @@
 
         btn.addEventListener('click', send);
         input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+        reportBugBtn.addEventListener('click', openBugModal);
+        cancelBugBtn.addEventListener('click', closeBugModal);
+        submitBugBtn.addEventListener('click', submitBugReport);
+        bugModal.addEventListener('click', e => {
+            if (e.target === bugModal) closeBugModal();
+        });
         input.focus();
     </script>
 </body>

@@ -6,6 +6,8 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__)))
 dotenv_path = os.path.join(project_root, '.env')
 load_dotenv(dotenv_path=dotenv_path)
 
+DATA_DIR = os.path.abspath(os.getenv("DATA_DIR", project_root))
+
 TAUTULLI_URL = os.getenv("TAUTULLI_URL")
 TAUTULLI_API_KEY = os.getenv("TAUTULLI_API_KEY")
 RADARR_URL = os.getenv("RADARR_URL")
@@ -29,6 +31,19 @@ PLEX_APP_NAME = os.getenv("PLEX_APP_NAME", "Media Bot")
 # Ollama
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:14b")
+
+# App / observability
+APP_VERSION = os.getenv("APP_VERSION", os.getenv("MEDIA_BOT_VERSION", "dev"))
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+OBSERVABILITY_SERVICE_NAME = os.getenv("OBSERVABILITY_SERVICE_NAME", "media-bot")
+SENTRY_DSN = os.getenv("SENTRY_DSN", "")
+OTEL_EXPORTER_OTLP_ENDPOINT = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+BUG_REPORTS_FILE = os.path.join(DATA_DIR, "bug_reports.jsonl")
+GITHUB_ISSUES_TOKEN = os.getenv("GITHUB_ISSUES_TOKEN", "")
+GITHUB_ISSUES_REPO = os.getenv("GITHUB_ISSUES_REPO", "")
+GITHUB_ISSUE_LABELS = [label.strip() for label in os.getenv("GITHUB_ISSUE_LABELS", "bug,reported-from-app").split(",") if label.strip()]
+
+GITHUB_ISSUES_ENABLED = bool(GITHUB_ISSUES_TOKEN and GITHUB_ISSUES_REPO and "/" in GITHUB_ISSUES_REPO)
 
 # Owner account — only this Plex username may delete media
 OWNER_PLEX_USERNAME = os.getenv("OWNER_PLEX_USERNAME", "")

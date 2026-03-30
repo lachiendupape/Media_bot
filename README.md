@@ -11,6 +11,9 @@ A natural-language media library assistant that lets you search and manage your 
 - **Fast disambiguation replies** -- if multiple close title matches are found, reply with `1`, `2`, `3`, etc. to choose.
 - **Delete media (owner only)** -- the Plex server owner can remove movies or TV series (with file deletion) through the chat.
 - **Disk space guard** -- blocks new downloads when any disk drops below 5% free space.
+- **User bug reports** -- the chat UI can send issue reports with request IDs and optional debug context.
+- **GitHub issue creation** -- bug reports can optionally create a GitHub issue when a repo and token are configured.
+- **Structured observability** -- JSON logs, request correlation IDs, optional Sentry errors, and optional OpenTelemetry traces.
 - **Plex OAuth login** -- browser-based sign-in using your Plex account; only users with access to your server can use the bot.
 - **API key access** -- programmatic access via `X-Api-Key` header for scripts and automation.
 - **Web chat UI** -- dark-themed chat interface with user avatars and real-time responses.
@@ -79,6 +82,14 @@ At minimum you need to set:
 | `OWNER_PLEX_USERNAME` | Plex username of the server owner (for delete permissions) |
 | `OLLAMA_BASE_URL` | Ollama API URL (default `http://127.0.0.1:11434`, set automatically in Docker) |
 | `OLLAMA_MODEL` | Ollama model name (default `qwen2.5:14b`) |
+| `APP_VERSION` | Version label shown in UI and attached to bug reports |
+| `LOG_LEVEL` | Backend log verbosity |
+| `OBSERVABILITY_SERVICE_NAME` | Service name used by observability exporters |
+| `SENTRY_DSN` | Optional backend error-reporting DSN |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Optional OpenTelemetry traces endpoint |
+| `GITHUB_ISSUES_REPO` | Optional GitHub repo for issue creation, in `owner/repo` format |
+| `GITHUB_ISSUES_TOKEN` | Optional GitHub token with permission to create issues |
+| `GITHUB_ISSUE_LABELS` | Optional comma-separated labels for created issues |
 
 Generate a secret key:
 
@@ -115,6 +126,7 @@ docker compose -f docker-compose.dev.yml up -d
 ```
 
 This runs an isolated local dev instance on `http://127.0.0.1:5001` with separate cache volume data.
+By default it uses `DEV_OLLAMA_MODEL` (falling back to `qwen2.5:7b`) so local feature testing works even when the larger production model is not installed.
 
 Check status:
 
@@ -159,6 +171,7 @@ curl -X POST http://localhost:5000/chat \
 |--------|------|------|-------------|
 | GET | `/` | Session | Web chat UI |
 | POST | `/chat` | Session or API key | Send a message, get a response |
+| POST | `/bug-report` | Session or API key | Submit a user bug report with optional debug context |
 | GET | `/health` | None | Service health check |
 | POST | `/cache/rebuild` | Session or API key | Rebuild the credit cache |
 | GET | `/auth/login` | None | Plex login page |
@@ -201,6 +214,7 @@ Media_bot/
   llm.py             -- LLM integration, tool schemas, handlers
   plex_auth.py       -- Plex OAuth PIN-based authentication
   config.py          -- Environment variable loading and validation
+  observability.py   -- Structured logging, tracing, and bug-report helpers
   Dockerfile         -- Container image definition
   docker-compose.yml -- Container orchestration
   docker-compose.dev.yml  -- Local-only development stack (127.0.0.1:5001)
@@ -243,6 +257,23 @@ A GitHub Actions workflow (`.github/workflows/ci.yml`) runs automatically on eve
 3. **Checks syntax** — `python -m compileall` confirms every `.py` file parses without errors.
 
 No secrets or service credentials are needed for CI; it only checks the Python source.
+
+## Bug Reporting and Observability
+
+The app now includes a lightweight reporting and observability starter:
+
+- Every request gets a request ID returned in the `X-Request-ID` response header.
+- `/chat` responses include the request ID so users can attach it to bug reports.
+- The chat UI includes a `Report issue` button that sends the last prompt/response context with optional debug metadata.
+- The same bug report flow can also create a GitHub issue when `GITHUB_ISSUES_REPO` and `GITHUB_ISSUES_TOKEN` are configured.
+  - **GitHub issues are auto-categorized and labeled** based on description keywords (bug, enhancement, search, chat, ui, performance, security).
+  - Issue titles are formatted as `[CATEGORY] description` for easy filtering.
+  - All users can submit reports (no authentication restriction on issue creation).
+- Backend logs are emitted as structured JSON for easier filtering and ingestion.
+- Sentry can be enabled with `SENTRY_DSN`.
+- OpenTelemetry traces can be enabled with `OTEL_EXPORTER_OTLP_ENDPOINT`.
+
+Bug reports are stored locally in `DATA_DIR/bug_reports.jsonl`.
 
 ## GitOps Release Flow
 
