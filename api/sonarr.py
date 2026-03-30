@@ -185,6 +185,3 @@ class SonarrAPI:
             print(f"Error adding series to Sonarr: {e}")
             return None, str(e)
 
-
-# Singleton instance
-sonarr = SonarrAPI()
