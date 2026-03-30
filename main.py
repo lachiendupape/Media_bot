@@ -100,9 +100,9 @@ def _generate_auto_labels(description, debug_context):
     if any(word in desc_lower for word in ['security', 'auth', 'permission', 'access']):
         labels.add('security')
     
-    # Add user-configured labels if present
+    # Add user-configured labels if present (config.GITHUB_ISSUE_LABELS is already a list)
     if config.GITHUB_ISSUE_LABELS:
-        labels.update(config.GITHUB_ISSUE_LABELS.split(','))
+        labels.update(config.GITHUB_ISSUE_LABELS)
     
     return list(labels)
 
