@@ -39,6 +39,10 @@ tools = [
                     "title": {
                         "type": "string",
                         "description": "The title of the movie to search for and add."
+                    },
+                    "is_kids": {
+                        "type": "boolean",
+                        "description": "Set true when this should be added to kids media folders."
                     }
                 },
                 "required": ["title"]
@@ -60,6 +64,10 @@ tools = [
                     "season": {
                         "type": "integer",
                         "description": "The season number to add. Omit to see available seasons."
+                    },
+                    "is_kids": {
+                        "type": "boolean",
+                        "description": "Set true when this should be added to kids media folders."
                     }
                 },
                 "required": ["title"]
@@ -155,13 +163,21 @@ tools = [
         "type": "function",
         "function": {
             "name": "delete_tv_series",
-            "description": "Removes a TV series from the Sonarr library. Only the server owner may call this.",
+            "description": (
+                "Removes a TV series or a specific season of a TV series from the Sonarr library. "
+                "If a season number is provided, only that season is unmonitored and its files are deleted. "
+                "If no season is given, the entire series is removed. Only the server owner may call this."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {
                         "type": "string",
                         "description": "The title of the TV series to delete."
+                    },
+                    "season": {
+                        "type": "integer",
+                        "description": "The season number to delete. Omit to delete the entire series."
                     },
                     "delete_files": {
                         "type": "boolean",
@@ -217,6 +233,141 @@ tools = [
     },
 ]
 
+# Speaking style definitions — maps style name to an LLM instruction string.
+SPEAKING_STYLES = {
+    "pirate": (
+        "You are a swashbuckling pirate. Respond using pirate speech: use 'Arr', 'matey', "
+        "'ye', 'aye', 'landlubber', 'shiver me timbers', 'ahoy', 'blimey', 'me hearties'. "
+        "Keep all factual information accurate but phrase everything as a pirate would."
+    ),
+    "robot": (
+        "You are a robot. Respond in mechanical, robotic language using formal clipped sentences. "
+        "Use phrases like 'AFFIRMATIVE', 'PROCESSING', 'QUERY ACCEPTED', 'EXECUTING', "
+        "'TASK COMPLETE', 'NEGATIVE', 'THIS UNIT', 'CALCULATING'. "
+        "Keep all factual information accurate."
+    ),
+    "sarcastic": (
+        "You are extremely sarcastic. Respond with dry humour, mock enthusiasm, and witty irony. "
+        "Use phrases like 'Oh wow, shocking', 'Because obviously', 'How surprising', "
+        "'What a surprise', 'I can't believe it'. Be passive-aggressive and sardonic. "
+        "Keep all factual information accurate but drip with sarcasm."
+    ),
+    "shakespearean": (
+        "You are a Shakespearean actor. Respond in Elizabethan English using 'thee', 'thou', "
+        "'hath', 'doth', 'prithee', 'forsooth', 'verily', 'art thou', 'wherefore', 'methinks', "
+        "'tis', 'hark', 'nay', 'yea'. Speak poetically and dramatically. "
+        "Keep all factual information accurate."
+    ),
+    "enthusiastic": (
+        "You are extremely enthusiastic and excited about everything! Use exclamation points "
+        "CONSTANTLY! Use ALL CAPS for emphasis! Add 'AMAZING!', 'FANTASTIC!', 'INCREDIBLE!', "
+        "'OH WOW!' frequently! Be over-the-top positive and energetic about everything! "
+        "Keep all factual information accurate."
+    ),
+}
+
+# Maps user-supplied keywords to a canonical style name.
+_STYLE_KEYWORDS: dict[str, str] = {
+    "pirate": "pirate",
+    "robot": "robot",
+    "robotic": "robot",
+    "sarcastic": "sarcastic",
+    "sarcasm": "sarcastic",
+    "shakespearean": "shakespearean",
+    "shakespeare": "shakespearean",
+    "elizabethan": "shakespearean",
+    "enthusiastic": "enthusiastic",
+    "excited": "enthusiastic",
+}
+
+# Pattern matching any known style keyword (escaped and joined for regex use).
+_STYLE_KEYWORD_PATTERN = "|".join(re.escape(word) for word in _STYLE_KEYWORDS)
+
+# Pre-compiled patterns used by _detect_style_command.
+_STYLE_RESET_PATTERNS = [
+    re.compile(r"\b(?:stop|disable|reset|turn\s+off)\s+(?:the\s+)?(?:\w+\s+)?(?:mode|style|voice)\b"),
+    re.compile(r"\b(?:normal|default|regular)\s+(?:mode|style|voice)\b"),
+    # Only treat "stop being ..." as a style reset when followed by a known style keyword.
+    re.compile(rf"\bstop\s+being\s+(?:so\s+)?(?:{_STYLE_KEYWORD_PATTERN})\b"),
+    re.compile(r"\breturn\s+to\s+normal\b"),
+    re.compile(r"\bno\s+more\s+styles?\b"),
+]
+_STYLE_SET_PATTERNS = [
+    re.compile(r"\b(?:speak|talk|respond|reply|write|chat|act)\s+(?:like|as)\s+(?:a\s+)?(\w+)"),
+    re.compile(r"\b(?:be|become)\s+(?:a\s+)?(\w+)"),
+    re.compile(r"\b(\w+)\s+mode\b"),
+    re.compile(r"\buse\s+(\w+)\s+(?:mode|style|voice)\b"),
+    re.compile(r"\b(?:switch\s+to|enable)\s+(\w+)(?:\s+(?:mode|style|voice))?\b"),
+    re.compile(r"\b(\w+)\s+style\b"),
+]
+
+_KIDS_HINT_PATTERN = re.compile(
+    r"\b(kids?|children|child|family|disney|pixar|animated|cartoon|young\s+kids?)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _looks_like_kids_request(title: str, is_kids: bool | None = None) -> bool:
+    """Infer kids routing when caller did not explicitly provide *is_kids*."""
+    if is_kids is not None:
+        return bool(is_kids)
+    return bool(_KIDS_HINT_PATTERN.search(title or ""))
+
+def _detect_style_command(message: str) -> tuple[str | None, bool]:
+    """Detect if *message* is a speaking-style change command.
+
+    Returns ``(style_name, is_style_command)``.
+    *style_name* is ``None`` when the user wants to reset to normal.
+    *is_style_command* is ``True`` only when a style command was detected.
+    """
+    msg_lower = (message or "").lower().strip()
+
+    # Reset / normal commands take priority.
+    for pattern in _STYLE_RESET_PATTERNS:
+        if pattern.search(msg_lower):
+            return None, True
+
+    # Style-setting commands — extract the keyword and look it up.
+    for pattern in _STYLE_SET_PATTERNS:
+        m = pattern.search(msg_lower)
+        if m:
+            word = m.group(1).lower()
+            if word in _STYLE_KEYWORDS:
+                return _STYLE_KEYWORDS[word], True
+
+    return None, False
+
+
+def _apply_speaking_style(text: str, style: str) -> str:
+    """Restyle *text* through the LLM using the given speaking *style*.
+
+    Returns the original text unchanged if the LLM call fails or the style
+    is not recognised.
+    """
+    if not client or not text or style not in SPEAKING_STYLES:
+        return text
+    style_instruction = SPEAKING_STYLES[style]
+    try:
+        restyle_response = client.chat.completions.create(
+            model=config.OLLAMA_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"{style_instruction}\n"
+                        "Rewrite the following message in your style. "
+                        "Preserve ALL factual details, names, numbers, emoji, and list structure. "
+                        "Output only the restyled message — no preamble or commentary."
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+        )
+        return restyle_response.choices[0].message.content or text
+    except Exception:
+        log.warning("Failed to apply speaking style '%s'", style, exc_info=True)
+        return text
+
 
 def _check_disk_space():
     """Check available disk space via Radarr. Returns (ok, message).
@@ -270,12 +421,44 @@ def _user_identity(user_info: dict | None) -> tuple[str, str]:
     return 'api_key', 'api_key'
 
 
+def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: bool, user_id: str, username: str) -> str:
+    """Performs the actual Radarr API call to add a movie, choosing the root folder based on the kids flag."""
+    preferred_root = config.RADARR_KIDS_MOVIE_ROOT if is_kids else config.RADARR_MOVIE_ROOT
+    root_folder = radarr.get_root_folder_by_path(preferred_root)
+    if not root_folder:
+        return "Failed to retrieve Radarr root folder."
+
+    quality_profile = radarr.get_quality_profile_by_name(config.RADARR_DEFAULT_QUALITY_PROFILE)
+    if not quality_profile:
+        return "Failed to retrieve Radarr quality profiles."
+
+    raw_tags = [config.MEDIA_BOT_TAG]
+    if is_kids:
+        raw_tags.append(config.KIDS_CONTENT_TAG)
+    tags = [t for t in raw_tags if t and str(t).strip()]
+
+    result, error = radarr.add_movie(
+        selected_movie,
+        root_folder['path'],
+        quality_profile['id'],
+        minimum_availability=config.RADARR_MINIMUM_AVAILABILITY,
+        tags=tags,
+    )
+    if result:
+        quota.record_download(user_id, username, "movie", selected_movie['title'])
+        return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
+    if error == 'already_exists':
+        return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
+    return f"Failed to add movie '{selected_movie['title']}': {error}"
+
+
 def add_radarr_movie_handler(
     title: str,
     state: dict = None,
     preferred_tmdb_id: int = None,
     preferred_year: int = None,
     user_info: dict = None,
+    is_kids: bool | None = None,
 ) -> str:
     ok, msg = _check_disk_space()
     if not ok:
@@ -286,6 +469,7 @@ def add_radarr_movie_handler(
     if not allowed:
         return quota_msg
 
+    is_kids_request = _looks_like_kids_request(title, is_kids)
     radarr = RadarrAPI()
     movies = radarr.lookup_movie(title)
     if not movies:
@@ -303,6 +487,7 @@ def add_radarr_movie_handler(
             state.pop('pending_series_pick', None)
             state['pending_movie_add'] = {
                 'query': title,
+                'is_kids': is_kids_request,
                 'options': [
                     {
                         'title': m.get('title', '?'),
@@ -320,23 +505,17 @@ def add_radarr_movie_handler(
 
     if selected_movie is None:
         selected_movie = movies[0]
-    root_folder = radarr.get_root_folder()
-    if not root_folder:
-        return "Failed to retrieve Radarr root folder."
+    if is_kids is None and config.RADARR_KIDS_MOVIE_ROOT and state is not None:
+        # state is required for multi-turn conversation; stateless API calls skip the prompt
+        state['pending_kids_check'] = {
+            'movie': selected_movie,
+        }
+        return (
+            f"One quick question before I add '{selected_movie['title']} ({selected_movie.get('year', '')})' — "
+            "is this a kids film or for adults? Reply with **kids** or **adults**."
+        )
 
-    quality_profiles = radarr.get_quality_profiles()
-    if not quality_profiles:
-        return "Failed to retrieve Radarr quality profiles."
-
-    quality_profile_id = quality_profiles[0]['id']
-    result, error = radarr.add_movie(selected_movie, root_folder['path'], quality_profile_id)
-    if result:
-        quota.record_download(user_id, username, "movie", selected_movie['title'])
-        notifications.record_pending_download(user_id, username, selected_movie['title'], "movie")
-        return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
-    if error == 'already_exists':
-        return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
-    return f"Failed to add movie '{selected_movie['title']}': {error}"
+    return _do_add_radarr_movie(radarr, selected_movie, is_kids=is_kids_request, user_id=user_id, username=username)
 
 def add_sonarr_series_handler(
     title: str,
@@ -345,16 +524,18 @@ def add_sonarr_series_handler(
     preferred_tvdb_id: int = None,
     preferred_year: int = None,
     user_info: dict = None,
+    is_kids: bool | None = None,
 ) -> str:
     ok, msg = _check_disk_space()
     if not ok:
         return msg
 
     user_id, username = _user_identity(user_info)
-    allowed, quota_msg = quota.check_quota(user_id, username, "tv_season")
+    allowed, quota_msg = quota.check_quota(user_id, username, "tv_series")
     if not allowed:
         return quota_msg
 
+    is_kids_request = _looks_like_kids_request(title, is_kids)
     sonarr = SonarrAPI()
     series = sonarr.lookup_series(title)
     if not series:
@@ -372,6 +553,7 @@ def add_sonarr_series_handler(
             state.pop('pending_movie_add', None)
             state['pending_series_pick'] = {
                 'query': title,
+                'is_kids': is_kids_request,
                 'options': [
                     {
                         'title': s.get('title', '?'),
@@ -401,6 +583,7 @@ def add_sonarr_series_handler(
                 'title': selected_series.get('title', title),
                 'year': selected_series.get('year'),
                 'tvdbId': selected_series.get('tvdbId'),
+                'is_kids': is_kids_request,
                 'available_seasons': sorted(s['seasonNumber'] for s in seasons),
             }
         season_list = ", ".join(str(s['seasonNumber']) for s in seasons)
@@ -418,20 +601,31 @@ def add_sonarr_series_handler(
     if state is not None:
         state.pop('pending_series_add', None)
 
-    root_folder = sonarr.get_root_folder()
+    preferred_root = config.SONARR_KIDS_TV_ROOT if is_kids_request else config.SONARR_TV_ROOT
+    root_folder = sonarr.get_root_folder_by_path(preferred_root)
     if not root_folder:
         return "Failed to retrieve Sonarr root folder."
 
-    quality_profiles = sonarr.get_quality_profiles()
-    if not quality_profiles:
+    quality_profile = sonarr.get_quality_profile_by_name(config.SONARR_DEFAULT_QUALITY_PROFILE)
+    if not quality_profile:
         return "Failed to retrieve Sonarr quality profiles."
 
-    quality_profile_id = quality_profiles[0]['id']
-    result, error = sonarr.add_series(selected_series, root_folder['path'], quality_profile_id, season_number=season)
+    raw_tags = [config.MEDIA_BOT_TAG]
+    if is_kids_request:
+        raw_tags.append(config.KIDS_CONTENT_TAG)
+    tags = [t for t in raw_tags if t and str(t).strip()]
+
+    result, error = sonarr.add_series(
+        selected_series,
+        root_folder['path'],
+        quality_profile['id'],
+        season_number=season,
+        series_type=config.SONARR_SERIES_TYPE,
+        tags=tags,
+    )
 
     if result:
-        quota.record_download(user_id, username, "tv_season", f"{selected_series['title']} S{season:02d}")
-        notifications.record_pending_download(user_id, username, selected_series['title'], "tv_season")
+        quota.record_download(user_id, username, "tv_series", selected_series['title'])
         return f"Great news! '{selected_series['title']}' Season {season} has been grabbed and is downloading now — it'll be with you shortly!"
     if error == 'already_exists':
         # Series exists in library — check if the requested season is already monitored
@@ -450,8 +644,7 @@ def add_sonarr_series_handler(
             updated, update_error = sonarr.update_series(existing['id'], existing)
             if updated:
                 sonarr.search_season(existing['id'], season)
-                quota.record_download(user_id, username, "tv_season", f"{existing['title']} S{season:02d}")
-                notifications.record_pending_download(user_id, username, existing['title'], "tv_season")
+                quota.record_download(user_id, username, "tv_series", existing['title'])
                 return (
                     f"Great news! '{existing['title']}' Season {season} has been grabbed "
                     f"and is downloading now — it'll be with you shortly!"
@@ -747,7 +940,19 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
             preferred_tmdb_id=picked.get('tmdbId'),
             preferred_year=picked.get('year'),
             user_info=user_info,
+            is_kids=pending_movie.get('is_kids'),
         )
+
+    # Pending kids/adults check for add_radarr_movie flow.
+    pending_kids = state.get('pending_kids_check')
+    if pending_kids:
+        lower = trimmed.lower()
+        if lower in ('kids', 'adults', 'adult'):
+            is_kids = lower == 'kids'
+            state.pop('pending_kids_check', None)
+            user_id, username = _user_identity(user_info)
+            return _do_add_radarr_movie(RadarrAPI(), pending_kids['movie'], is_kids=is_kids, user_id=user_id, username=username)
+        return "Please reply with **kids** or **adults** to confirm the movie category."
 
     # Pending series disambiguation for add_sonarr_series flow.
     pending_series_pick = state.get('pending_series_pick')
@@ -764,6 +969,7 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
             preferred_tvdb_id=picked.get('tvdbId'),
             preferred_year=picked.get('year'),
             user_info=user_info,
+            is_kids=pending_series_pick.get('is_kids'),
         )
 
     # Pending season selection for add_sonarr_series flow.
@@ -785,6 +991,7 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
                 preferred_tvdb_id=pending_series.get('tvdbId'),
                 preferred_year=pending_series.get('year'),
                 user_info=user_info,
+                is_kids=pending_series.get('is_kids'),
             )
 
     pending = state.get('pending_title_lookup')
@@ -846,7 +1053,7 @@ def delete_movie_handler(title: str, delete_files: bool = True, user_info: dict 
     return f"Failed to delete '{movie['title']}'. Please check Radarr."
 
 
-def delete_tv_series_handler(title: str, delete_files: bool = True, user_info: dict = None) -> str:
+def delete_tv_series_handler(title: str, season: int = None, delete_files: bool = True, user_info: dict = None) -> str:
     if not _is_owner(user_info):
         return "❌ Sorry, only the server owner can delete media."
 
@@ -862,6 +1069,47 @@ def delete_tv_series_handler(title: str, delete_files: bool = True, user_info: d
         return f"Multiple series found matching '{title}': {titles}. Please be more specific."
 
     series = matches[0]
+
+    # Season-specific deletion: unmonitor the season and optionally delete its files
+    if season is not None:
+        all_seasons = series.get('seasons', [])
+        real_seasons = [s for s in all_seasons if s['seasonNumber'] > 0]
+        season_exists = any(s['seasonNumber'] == season for s in real_seasons)
+        if not season_exists:
+            valid = sorted(s['seasonNumber'] for s in real_seasons)
+            return (
+                f"Season {season} doesn't exist for '{series['title']}'. "
+                f"Available seasons: {', '.join(str(n) for n in valid)}."
+            )
+
+        unmonitored = sonarr.unmonitor_season(series['id'], season)
+        if not unmonitored:
+            return f"Failed to unmonitor Season {season} of '{series['title']}'. Please check Sonarr."
+
+        files_deleted = False
+        if delete_files:
+            episode_files = sonarr.get_episode_files(series['id'], season_number=season)
+            if episode_files is None:
+                # API error fetching files
+                files_deleted = False
+            elif not episode_files:
+                # No files on disk — nothing to delete, treat as success
+                files_deleted = True
+            else:
+                file_ids = [f['id'] for f in episode_files]
+                files_deleted = sonarr.delete_episode_files_bulk(file_ids)
+
+        if delete_files and not files_deleted:
+            return (
+                f"✅ Season {season} of '{series['title']}' has been unmonitored, "
+                f"but its files could not be deleted. Please check Sonarr."
+            )
+        return (
+            f"✅ Season {season} of '{series['title']}' has been unmonitored and "
+            f"{'its files deleted from disk' if delete_files else 'kept on disk'}."
+        )
+
+    # Full series deletion
     success = sonarr.delete_series(series['id'], delete_files=delete_files)
     if success:
         return f"✅ '{series['title']} ({series.get('year', '')})' has been removed from your library."
@@ -1008,8 +1256,51 @@ def _normalize_short_plural_person_name(text: str) -> str:
     return cleaned[:-1]
 
 
+def _capabilities_response() -> str:
+    """Return a stable help message covering tested chat capabilities."""
+    lines = [
+        "Here’s what I can help with right now:",
+        "",
+        "1. Add a movie by title.",
+        "2. Add a TV series and let you choose which season to grab.",
+        "3. Send kids movies and kids TV to separate library folders when that’s what you want.",
+        "4. Search your library by actor or director.",
+        "5. Tell you who starred in or directed a specific movie or show in your library.",
+        "6. Recommend movies or shows from your library that share cast or directors with something you already have.",
+        "7. Delete movies or TV series if you’re the server owner.",
+        "8. Change how I reply with commands like 'pirate mode', 'robot style', or 'reset style'.",
+        "",
+        "A few handy examples:",
+        "- Add the movie Sinners",
+        "- Add the show Adolescence",
+        "- Add Bluey for kids",
+        "- What movies do I have with Tom Hanks?",
+        "- Who directed Goodfellas?",
+        "- Who starred in Severance?",
+        "- Recommend something like Interstellar",
+        "- Delete the movie Jaws 3",
+        "- Speak like a pirate",
+        "",
+        "Everything I do stays within your Plex-connected library and services.",
+    ]
+    return "\n".join(lines)
+
+
 def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
     lowered = (user_message or '').strip()
+
+    help_patterns = [
+        re.compile(r'^help\??$', re.IGNORECASE),
+        re.compile(r'^what\s+can\s+you\s+do\??$', re.IGNORECASE),
+        re.compile(r'^what\s+do\s+you\s+do\??$', re.IGNORECASE),
+        re.compile(r'^show\s+help\??$', re.IGNORECASE),
+        re.compile(r'^(?:list|show)\s+(?:your\s+)?(?:features|capabilities|commands)\??$', re.IGNORECASE),
+    ]
+    for pattern in help_patterns:
+        if pattern.match(lowered):
+            if telemetry is not None:
+                telemetry['heuristic_route'] = 'capabilities_help'
+            return _capabilities_response()
 
     # --- Title credit lookups (who directed/starred in a specific title) ---
     director_match = re.match(r'^who\s+directed\s+(.+)$', lowered, flags=re.IGNORECASE)
@@ -1148,14 +1439,41 @@ def chat_with_llm(
         'request_id': request_id,
     })
 
+    # Handle speaking-style commands before any other routing.
+    requested_style, is_style_cmd = _detect_style_command(user_message)
+    if is_style_cmd:
+        if state is not None:
+            state['speaking_style'] = requested_style
+        if requested_style:
+            style_name = requested_style.capitalize()
+            return (
+                f"🎭 Speaking style set to {style_name}! "
+                f"I'll respond in {style_name} style from now on. "
+                "Say \"reset style\" to return to normal."
+            )
+        return "✅ Speaking style reset to normal."
+
+    current_style = state.get('speaking_style') if state else None
+    if current_style not in SPEAKING_STYLES:
+        current_style = None
+        if state is not None:
+            state.pop('speaking_style', None)
+
     numeric_selection_result = _resolve_pending_numeric_selection(user_message, state=state, user_info=user_info)
     if numeric_selection_result is not None:
         telemetry['numeric_selection'] = True
+        if current_style:
+            return _apply_speaking_style(numeric_selection_result, current_style)
         return numeric_selection_result
 
     heuristic_result = _try_rule_based_route(user_message, state=state, telemetry=telemetry)
     if heuristic_result is not None:
+        if current_style:
+            return _apply_speaking_style(heuristic_result, current_style)
         return heuristic_result
+
+    # Build system prompt, appending style instructions when a style is active.
+    style_suffix = f"\nSTYLE INSTRUCTIONS: {SPEAKING_STYLES[current_style]}" if current_style else ""
 
     messages = [
         {
@@ -1171,6 +1489,12 @@ def chat_with_llm(
                 "If the user specifies a season number, include it. If they don't specify a season, "
                 "call it WITHOUT the season parameter first to see available seasons, then tell the "
                 "user which seasons are available and ask them which one they'd like.\n"
+                "- Use is_kids=true for movie/show requests that are clearly for kids or family content.\n"
+                "- Media defaults (such as availability, quality profiles, and series type) are enforced "
+                "automatically according to server configuration; do not assume or describe them as fixed values.\n"
+                "- If per-user daily limits are enabled, they are enforced automatically according to server "
+                "configuration. You may mention that limits exist, but do not state specific numbers unless "
+                "explicitly provided in the conversation.\n"
                 "- When the user replies with a season number for a show you already looked up, "
                 "call add_sonarr_series again WITH the season parameter.\n"
                 "- When the user asks what movies or shows star a particular ACTOR or ACTRESS, "
@@ -1190,7 +1514,10 @@ def chat_with_llm(
                 "- If you ask the user to choose between multiple title matches, and they reply with "
                 "just a number (like 1, 2, or 3), treat that as their selection.\n"
                 "- When the user asks to DELETE or REMOVE a MOVIE, call delete_movie.\n"
-                "- When the user asks to DELETE or REMOVE a TV SERIES or TV SHOW, call delete_tv_series.\n"
+                "- When the user asks to DELETE or REMOVE a TV SERIES, TV SHOW, or a specific SEASON "
+                "of a TV show (e.g. 'delete season 2 of Lost' or 'remove Lost season 2'), call "
+                "delete_tv_series. Include the season number in the 'season' parameter when a "
+                "specific season is mentioned. NEVER call add_sonarr_series for a delete/remove request.\n"
                 "- When the user asks for movies or shows SIMILAR TO, LIKE, or RECOMMENDATIONS based on "
                 "a specific title, IMMEDIATELY call recommend_similar with the reference title. "
                 "Set media_type='movie' for movie-only requests, 'tv' for TV-only, or omit for both.\n"
@@ -1198,6 +1525,7 @@ def chat_with_llm(
                 "IS IT DONE, or if there are download ISSUES or ERRORS, call check_download_status.\n"
                 "- For general questions, respond directly without calling any tools.\n"
                 "- Be concise."
+                + style_suffix
             )
         },
         {"role": "user", "content": user_message}
@@ -1244,13 +1572,19 @@ def chat_with_llm(
                 
                 with start_span('llm.tool_execution', {'tool.name': function_name}):
                     if function_name == "add_radarr_movie":
-                        result = add_radarr_movie_handler(arguments.get("title"), state=state, user_info=user_info)
+                        result = add_radarr_movie_handler(
+                            arguments.get("title"),
+                            state=state,
+                            user_info=user_info,
+                            is_kids=arguments.get("is_kids"),
+                        )
                     elif function_name == "add_sonarr_series":
                         result = add_sonarr_series_handler(
                             arguments.get("title"),
                             season=arguments.get("season"),
                             state=state,
                             user_info=user_info,
+                            is_kids=arguments.get("is_kids"),
                         )
                     elif function_name == "search_by_person":
                         requested_media_type = arguments.get("media_type")
@@ -1283,6 +1617,7 @@ def chat_with_llm(
                     elif function_name == "delete_tv_series":
                         result = delete_tv_series_handler(
                             arguments.get("title"),
+                            season=arguments.get("season"),
                             delete_files=arguments.get("delete_files", True),
                             user_info=user_info,
                         )
@@ -1315,7 +1650,10 @@ def chat_with_llm(
                 results.append(result)
             
             # Return the handler results directly - they're already human-readable
-            return "\n".join(results)
+            final_result = "\n".join(results)
+            if current_style:
+                return _apply_speaking_style(final_result, current_style)
+            return final_result
         else:
             telemetry['direct_response'] = True
             return response_message.content

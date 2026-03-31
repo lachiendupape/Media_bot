@@ -188,6 +188,17 @@
             color: #c9d2de;
             border: 1px solid #38506a;
         }
+        .style-badge {
+            display: none;
+            padding: 4px 10px;
+            border-radius: 12px;
+            background: #0f3460;
+            border: 1px solid #e5a00d;
+            color: #e5a00d;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .style-badge.visible { display: inline-block; }
         .report-status {
             margin-top: 12px;
             font-size: 13px;
@@ -241,6 +252,7 @@
             {% if user.thumb %}<img src="{{ user.thumb }}" alt="">{% endif %}
             <span class="username">{{ user.username }}</span>
             <div class="header-actions">
+                <span class="style-badge" id="styleBadge"></span>
                 <button class="header-btn" id="reportBugBtn" type="button">Report issue</button>
                 <span class="request-meta">Version {{ app_version }}</span>
                 <a href="/auth/logout">Sign out</a>
@@ -249,19 +261,18 @@
     </header>
     <div class="notification-banner" id="notificationBanner" aria-live="polite" aria-label="Download notifications"></div>
     <div class="chat-area" id="chatArea">
-        <div class="msg bot">Hi {{ user.username }}! I'm your <strong>{{ plex_server_name or 'Plex' }} library assistant</strong>. Here's what I can do:
+        <div class="msg bot">Hi {{ user.username }}! I’m here to help with your <strong>{{ plex_server_name or 'Plex' }} library</strong>.
 
-📚 <strong>Search your library</strong> — find movies or shows starring an actor, or directed by a director
-🔍 <strong>Look up credits</strong> — ask who starred in or directed any title in your library
-➕ <strong>Add content</strong> — request a movie (via Radarr) or a TV series (via Sonarr)
-🗑️ <strong>Remove content</strong> — delete movies or TV series (owner only)
+You can ask me to find cast or directors, add movies or TV, clean up media if you’re the owner, or suggest something similar to a title you already have.
 
-Everything is scoped to <em>your Plex server only</em> — I can't browse the internet or recommend things outside your library.
+I can also switch up how I reply. Try something like "speak like a pirate" or "reset style".
 
-What can I help with?</div>
+If you want the full list, just say <strong>help</strong> or <strong>what can you do</strong>.
+
+I’m only working with your own library and connected services, not the wider internet.</div>
     </div>
     <div class="input-area">
-        <input type="text" id="msgInput" placeholder="e.g. Add the movie Sinners to Radarr..." autocomplete="off">
+        <input type="text" id="msgInput" placeholder="Try: add Sinners, who starred in Heat, or what can you do?" autocomplete="off">
         <button id="sendBtn">Send</button>
     </div>
     <div class="modal-backdrop" id="bugModal">
@@ -290,6 +301,7 @@ What can I help with?</div>
         const chatArea = document.getElementById('chatArea');
         const input = document.getElementById('msgInput');
         const btn = document.getElementById('sendBtn');
+        const styleBadge = document.getElementById('styleBadge');
         const reportBugBtn = document.getElementById('reportBugBtn');
         const bugModal = document.getElementById('bugModal');
         const cancelBugBtn = document.getElementById('cancelBugBtn');
@@ -389,6 +401,16 @@ What can I help with?</div>
             }
         }
 
+        function updateStyleBadge(style) {
+            if (style) {
+                styleBadge.textContent = '🎭 ' + style.charAt(0).toUpperCase() + style.slice(1);
+                styleBadge.classList.add('visible');
+            } else {
+                styleBadge.textContent = '';
+                styleBadge.classList.remove('visible');
+            }
+        }
+
         async function send() {
             const text = input.value.trim();
             if (!text) return;
@@ -430,6 +452,9 @@ What can I help with?</div>
                         response: data.response,
                         version: data.version || lastInteraction.version,
                     };
+                    if ('speaking_style' in data) {
+                        updateStyleBadge(data.speaking_style);
+                    }
                 }
             } catch (e) {
                 typing.remove();

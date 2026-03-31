@@ -12,6 +12,7 @@ TAUTULLI_URL = os.getenv("TAUTULLI_URL")
 TAUTULLI_API_KEY = os.getenv("TAUTULLI_API_KEY")
 RADARR_URL = os.getenv("RADARR_URL")
 RADARR_API_KEY = os.getenv("RADARR_API_KEY")
+RADARR_KIDS_ROOT_FOLDER = os.getenv("RADARR_KIDS_ROOT_FOLDER", "")
 SONARR_URL = os.getenv("SONARR_URL")
 SONARR_API_KEY = os.getenv("SONARR_API_KEY")
 LIDARR_URL = os.getenv("LIDARR_URL")
@@ -49,16 +50,28 @@ GITHUB_ISSUES_ENABLED = bool(GITHUB_ISSUES_TOKEN and GITHUB_ISSUES_REPO and "/" 
 # Owner account — only this Plex username may delete media
 OWNER_PLEX_USERNAME = os.getenv("OWNER_PLEX_USERNAME", "")
 
-# Webhook secret — optional shared secret for Radarr/Sonarr webhook authentication.
-# Configure the same value in Radarr/Sonarr under Settings > Connect > Webhook > Extra Headers
-# as: Authorization: Bearer <your_secret>
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+# Media request defaults
+MEDIA_BOT_TAG = os.getenv("MEDIA_BOT_TAG", "media-bot")
+KIDS_CONTENT_TAG = os.getenv("KIDS_CONTENT_TAG", "kids")
+
+# Radarr defaults
+RADARR_MOVIE_ROOT = os.getenv("RADARR_MOVIE_ROOT", "/movies")
+RADARR_KIDS_MOVIE_ROOT = os.getenv("RADARR_KIDS_MOVIE_ROOT", "/kidsmovies")
+RADARR_DEFAULT_QUALITY_PROFILE = os.getenv("RADARR_DEFAULT_QUALITY_PROFILE", "HD-1080p")
+RADARR_MINIMUM_AVAILABILITY = os.getenv("RADARR_MINIMUM_AVAILABILITY", "released")
+
+# Sonarr defaults
+SONARR_TV_ROOT = os.getenv("SONARR_TV_ROOT", "/tv")
+SONARR_KIDS_TV_ROOT = os.getenv("SONARR_KIDS_TV_ROOT", "/kidstv")
+SONARR_DEFAULT_QUALITY_PROFILE = os.getenv("SONARR_DEFAULT_QUALITY_PROFILE", "HD - 720p/1080p")
+SONARR_SERIES_TYPE = os.getenv("SONARR_SERIES_TYPE", "standard")
 
 # Download quotas
 QUOTA_ENABLED = os.getenv("QUOTA_ENABLED", "").lower() in ("1", "true", "yes")
 # 0 means unlimited; positive integers set the daily cap
-DAILY_MOVIE_QUOTA = int(os.getenv("DAILY_MOVIE_QUOTA", "0"))
-DAILY_TV_SEASON_QUOTA = int(os.getenv("DAILY_TV_SEASON_QUOTA", "0"))
+DAILY_MOVIE_QUOTA = int(os.getenv("DAILY_MOVIE_QUOTA", "3"))
+# New key is TV series quota. Fall back to legacy TV season key for compatibility.
+DAILY_TV_SERIES_QUOTA = int(os.getenv("DAILY_TV_SERIES_QUOTA", os.getenv("DAILY_TV_SEASON_QUOTA", "1")))
 
 # Flask
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
