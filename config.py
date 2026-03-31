@@ -73,7 +73,7 @@ DAILY_MOVIE_QUOTA = int(os.getenv("DAILY_MOVIE_QUOTA", "3"))
 DAILY_TV_SERIES_QUOTA = int(os.getenv("DAILY_TV_SERIES_QUOTA", os.getenv("DAILY_TV_SEASON_QUOTA", "1")))
 
 # Webhook auth — optional shared secret for Radarr/Sonarr webhook endpoints
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 
 # Flask
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")

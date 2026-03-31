@@ -97,7 +97,7 @@ At minimum you need to set:
 | `GITHUB_ISSUES_REPO` | Optional GitHub repo for issue creation, in `owner/repo` format |
 | `GITHUB_ISSUES_TOKEN` | Optional GitHub token with permission to create issues |
 | `GITHUB_ISSUE_LABELS` | Optional comma-separated labels for created issues |
-| `WEBHOOK_SECRET` | Optional shared secret for Radarr/Sonarr webhook endpoints |
+| `WEBHOOK_SECRET` | Shared secret for Radarr/Sonarr webhook endpoints |
 | `QUOTA_ENABLED` | Set to `true` to enforce per-user daily download limits |
 | `DAILY_MOVIE_QUOTA` | Max movie downloads per user per day (0 = unlimited) |
 | `DAILY_TV_SERIES_QUOTA` | Max TV series downloads per user per day (0 = unlimited) |
@@ -206,8 +206,8 @@ curl -X POST http://localhost:5000/chat \
 | GET | `/health` | None | Service health check |
 | POST | `/cache/rebuild` | Session or API key | Rebuild the credit cache |
 | GET | `/notifications` | Session or API key | Poll for pending download notifications |
-| POST | `/webhooks/radarr` | Webhook secret | Radarr download/health event webhook |
-| POST | `/webhooks/sonarr` | Webhook secret | Sonarr download/health event webhook |
+| POST | `/webhooks/radarr` | None (if `WEBHOOK_SECRET` unset) / Webhook secret | Radarr download/health event webhook |
+| POST | `/webhooks/sonarr` | None (if `WEBHOOK_SECRET` unset) / Webhook secret | Sonarr download/health event webhook |
 | GET | `/auth/login` | None | Plex login page |
 | GET | `/auth/start` | None | Initiate Plex OAuth flow |
 | GET | `/auth/callback` | None | Plex OAuth callback |
