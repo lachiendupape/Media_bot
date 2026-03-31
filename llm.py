@@ -449,7 +449,7 @@ def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: boo
         try:
             notifications.record_pending_download(user_id, username, selected_movie['title'], "movie")
         except Exception:
-            log.warning("Failed to record pending download notification for movie '%s'", selected_movie.get('title'))
+            log.warning("Failed to record pending download notification for movie")
         return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
     if error == 'already_exists':
         return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
@@ -633,7 +633,7 @@ def add_sonarr_series_handler(
         try:
             notifications.record_pending_download(user_id, username, selected_series['title'], "tv_season")
         except Exception:
-            log.warning("Failed to record pending download notification for series '%s'", selected_series.get('title'))
+            log.warning("Failed to record pending download notification for series")
         return f"Great news! '{selected_series['title']}' Season {season} has been grabbed and is downloading now — it'll be with you shortly!"
     if error == 'already_exists':
         # Series exists in library — check if the requested season is already monitored
@@ -656,7 +656,7 @@ def add_sonarr_series_handler(
                 try:
                     notifications.record_pending_download(user_id, username, existing['title'], "tv_season")
                 except Exception:
-                    log.warning("Failed to record pending download notification for series '%s'", existing.get('title'))
+                    log.warning("Failed to record pending download notification for series")
                 return (
                     f"Great news! '{existing['title']}' Season {season} has been grabbed "
                     f"and is downloading now — it'll be with you shortly!"
