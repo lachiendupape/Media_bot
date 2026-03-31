@@ -563,7 +563,10 @@ def _check_webhook_auth() -> bool:
     auth_header = request.headers.get('Authorization', '')
     if auth_header.startswith('Bearer ') and hmac.compare_digest(auth_header[7:], secret):
         return True
-    if hmac.compare_digest(request.args.get('secret', ''), secret):
+    # For security, avoid passing secrets in URLs in production.
+    # In non-production environments, allow a query-parameter fallback for convenience.
+    env = os.getenv('FLASK_ENV', 'development')
+    if env != 'production' and hmac.compare_digest(request.args.get('secret', ''), secret):
         return True
     return False
 
