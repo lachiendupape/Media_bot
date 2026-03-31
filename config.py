@@ -12,7 +12,6 @@ TAUTULLI_URL = os.getenv("TAUTULLI_URL")
 TAUTULLI_API_KEY = os.getenv("TAUTULLI_API_KEY")
 RADARR_URL = os.getenv("RADARR_URL")
 RADARR_API_KEY = os.getenv("RADARR_API_KEY")
-RADARR_KIDS_ROOT_FOLDER = os.getenv("RADARR_KIDS_ROOT_FOLDER", "")
 SONARR_URL = os.getenv("SONARR_URL")
 SONARR_API_KEY = os.getenv("SONARR_API_KEY")
 LIDARR_URL = os.getenv("LIDARR_URL")
@@ -72,6 +71,9 @@ QUOTA_ENABLED = os.getenv("QUOTA_ENABLED", "").lower() in ("1", "true", "yes")
 DAILY_MOVIE_QUOTA = int(os.getenv("DAILY_MOVIE_QUOTA", "3"))
 # New key is TV series quota. Fall back to legacy TV season key for compatibility.
 DAILY_TV_SERIES_QUOTA = int(os.getenv("DAILY_TV_SERIES_QUOTA", os.getenv("DAILY_TV_SEASON_QUOTA", "1")))
+
+# Webhook auth — optional shared secret for Radarr/Sonarr webhook endpoints
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 
 # Flask
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
