@@ -6,10 +6,12 @@ A natural-language media library assistant that lets you search and manage your 
 
 - **Add movies** -- tell it a title and it searches Radarr, adds the movie, and kicks off a download.
 - **Add TV series by season** -- searches Sonarr, lists available seasons, and lets you pick which to grab.
-- **Search by person** -- queries a local credit cache to find movies and TV series by actor or director name, with optional filters for media type and role.
+- **Title disambiguation** -- when multiple movies or series share a name (e.g. King Kong), the bot presents numbered options and lets you pick the correct one.
+- **Search by person** -- queries a local credit cache to find movies and TV series by actor or director name, with optional filters for media type and role. Supports partial names, fuzzy matching, and decade filtering.
 - **Reverse title lookup** -- ask who starred in or directed a specific movie/TV title in your library.
-- **Fast disambiguation replies** -- if multiple close title matches are found, reply with `1`, `2`, `3`, etc. to choose.
+- **Recommendations** -- ask for movies or shows similar to a title in your library; the bot finds titles sharing cast or directors.
 - **Delete media (owner only)** -- the Plex server owner can remove movies or TV series (with file deletion) through the chat.
+- **Download quotas** -- optional per-user daily download limits for movies and TV seasons, with per-user overrides and UTC midnight reset.
 - **Disk space guard** -- blocks new downloads when any disk drops below 5% free space.
 - **User bug reports** -- the chat UI can send issue reports with request IDs and optional debug context.
 - **GitHub issue creation** -- bug reports can optionally create a GitHub issue when a repo and token are configured.
@@ -91,6 +93,9 @@ At minimum you need to set:
 | `GITHUB_ISSUES_REPO` | Optional GitHub repo for issue creation, in `owner/repo` format |
 | `GITHUB_ISSUES_TOKEN` | Optional GitHub token with permission to create issues |
 | `GITHUB_ISSUE_LABELS` | Optional comma-separated labels for created issues |
+| `QUOTA_ENABLED` | Set to `true` to enforce per-user daily download limits |
+| `DAILY_MOVIE_QUOTA` | Max movie downloads per user per day (0 = unlimited) |
+| `DAILY_TV_SEASON_QUOTA` | Max TV season downloads per user per day (0 = unlimited) |
 
 Generate a secret key:
 
@@ -159,6 +164,7 @@ Navigate to `http://localhost:5000` and sign in with your Plex account. Then cha
 - "What has Christopher Nolan directed?"
 - "Who directed Goodfellas?"
 - "Who starred in Severance?"
+- "Movies similar to Interstellar"
 - "Delete the movie Jaws 3" (owner only)
 
 ### API access

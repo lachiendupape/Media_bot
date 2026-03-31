@@ -179,6 +179,32 @@ tools = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "recommend_similar",
+            "description": (
+                "Recommends movies or TV series from the library that share cast or directors "
+                "with a given title. Use when the user asks for recommendations similar to a "
+                "specific movie or show they mention."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "The reference movie or TV title to base recommendations on."
+                    },
+                    "media_type": {
+                        "type": "string",
+                        "enum": ["movie", "tv"],
+                        "description": "Limit recommendations to 'movie' or 'tv'. Omit for both."
+                    }
+                },
+                "required": ["title"]
+            }
+        }
+    },
 ]
 
 # Speaking style definitions — maps style name to an LLM instruction string.
@@ -260,7 +286,6 @@ def _looks_like_kids_request(title: str, is_kids: bool | None = None) -> bool:
     if is_kids is not None:
         return bool(is_kids)
     return bool(_KIDS_HINT_PATTERN.search(title or ""))
-
 
 def _detect_style_command(message: str) -> tuple[str | None, bool]:
     """Detect if *message* is a speaking-style change command.
@@ -370,6 +395,36 @@ def _user_identity(user_info: dict | None) -> tuple[str, str]:
     return 'api_key', 'api_key'
 
 
+def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: bool, user_id: str, username: str) -> str:
+    """Performs the actual Radarr API call to add a movie, choosing the root folder based on the kids flag."""
+    preferred_root = config.RADARR_KIDS_MOVIE_ROOT if is_kids else config.RADARR_MOVIE_ROOT
+    root_folder = radarr.get_root_folder_by_path(preferred_root)
+    if not root_folder:
+        return "Failed to retrieve Radarr root folder."
+
+    quality_profile = radarr.get_quality_profile_by_name(config.RADARR_DEFAULT_QUALITY_PROFILE)
+    if not quality_profile:
+        return "Failed to retrieve Radarr quality profiles."
+
+    tags = [config.MEDIA_BOT_TAG]
+    if is_kids:
+        tags.append(config.KIDS_CONTENT_TAG)
+
+    result, error = radarr.add_movie(
+        selected_movie,
+        root_folder['path'],
+        quality_profile['id'],
+        minimum_availability=config.RADARR_MINIMUM_AVAILABILITY,
+        tags=tags,
+    )
+    if result:
+        quota.record_download(user_id, username, "movie", selected_movie['title'])
+        return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
+    if error == 'already_exists':
+        return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
+    return f"Failed to add movie '{selected_movie['title']}': {error}"
+
+
 def add_radarr_movie_handler(
     title: str,
     state: dict = None,
@@ -423,32 +478,17 @@ def add_radarr_movie_handler(
 
     if selected_movie is None:
         selected_movie = movies[0]
-    preferred_root = config.RADARR_KIDS_MOVIE_ROOT if is_kids_request else config.RADARR_MOVIE_ROOT
-    root_folder = radarr.get_root_folder_by_path(preferred_root)
-    if not root_folder:
-        return "Failed to retrieve Radarr root folder."
+    if is_kids is None and config.RADARR_KIDS_MOVIE_ROOT and state is not None:
+        # state is required for multi-turn conversation; stateless API calls skip the prompt
+        state['pending_kids_check'] = {
+            'movie': selected_movie,
+        }
+        return (
+            f"One quick question before I add '{selected_movie['title']} ({selected_movie.get('year', '')})' — "
+            "is this a kids film or for adults? Reply with **kids** or **adults**."
+        )
 
-    quality_profile = radarr.get_quality_profile_by_name(config.RADARR_DEFAULT_QUALITY_PROFILE)
-    if not quality_profile:
-        return "Failed to retrieve Radarr quality profiles."
-
-    tags = [config.MEDIA_BOT_TAG]
-    if is_kids_request:
-        tags.append(config.KIDS_CONTENT_TAG)
-
-    result, error = radarr.add_movie(
-        selected_movie,
-        root_folder['path'],
-        quality_profile['id'],
-        minimum_availability=config.RADARR_MINIMUM_AVAILABILITY,
-        tags=tags,
-    )
-    if result:
-        quota.record_download(user_id, username, "movie", selected_movie['title'])
-        return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
-    if error == 'already_exists':
-        return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
-    return f"Failed to add movie '{selected_movie['title']}': {error}"
+    return _do_add_radarr_movie(radarr, selected_movie, is_kids=is_kids_request, user_id=user_id, username=username)
 
 def add_sonarr_series_handler(
     title: str,
@@ -782,6 +822,17 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
             is_kids=pending_movie.get('is_kids'),
         )
 
+    # Pending kids/adults check for add_radarr_movie flow.
+    pending_kids = state.get('pending_kids_check')
+    if pending_kids:
+        lower = trimmed.lower()
+        if lower in ('kids', 'adults', 'adult'):
+            is_kids = lower == 'kids'
+            state.pop('pending_kids_check', None)
+            user_id, username = _user_identity(user_info)
+            return _do_add_radarr_movie(RadarrAPI(), pending_kids['movie'], is_kids=is_kids, user_id=user_id, username=username)
+        return "Please reply with **kids** or **adults** to confirm the movie category."
+
     # Pending series disambiguation for add_sonarr_series flow.
     pending_series_pick = state.get('pending_series_pick')
     if pending_series_pick and trimmed.isdigit():
@@ -903,11 +954,67 @@ def delete_tv_series_handler(title: str, delete_files: bool = True, user_info: d
     return f"Failed to delete '{series['title']}'. Please check Sonarr."
 
 
+def recommend_similar_handler(title: str, media_type: str = None, state: dict = None) -> str:
+    """Return library titles that share directors or cast with the given reference title."""
+    # Always search credits without media_type filter so we can find the reference title
+    # regardless of type, then apply media_type only when searching for related titles.
+    credits = credit_cache.search_title_credits(title, media_type=None)
+    if credits is None:
+        return "The credit search index is still being built. Please try again in a moment."
+    if not credits:
+        return (
+            f"Sorry, I couldn't find '{title}' in the library, so I can't suggest similar titles. "
+            "If you'd like to add it, just ask!"
+        )
+
+    # Collect unique directors and top-billed actors for the reference title.
+    directors = list(dict.fromkeys(c['person_name'] for c in credits if c['role'] == 'director'))
+    actors = list(dict.fromkeys(c['person_name'] for c in credits if c['role'] == 'actor'))
+
+    # Normalise the reference title for exclusion comparison.
+    ref_title_lower = credits[0]['title'].lower()
+    ref_display = credits[0]['title']
+
+    # Search the library for every known person and collect matching titles.
+    # Limit to the top 5 actors to keep results focused and avoid overly broad matches.
+    seen_keys: set = set()
+    recommendations: list = []
+
+    for person in directors + actors[:5]:
+        results = credit_cache.search(person, media_type=media_type) or []
+        for r in results:
+            if r['title'].lower() == ref_title_lower:
+                continue
+            key = (r['title'].lower(), r['media_type'])
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            recommendations.append(r)
+
+    if not recommendations:
+        return (
+            f"I found '{ref_display}' in the library but couldn't find other titles "
+            "sharing its cast or directors. Try browsing by actor or director directly!"
+        )
+
+    # Sort by year descending so newest appear first.
+    recommendations.sort(key=lambda r: r.get('year') or 0, reverse=True)
+
+    lines = [f"Here are titles in your library that share cast or directors with '{ref_display}':"]
+    for r in recommendations[:15]:
+        label = "📺" if r['media_type'] == 'tv' else "🎬"
+        status = "downloaded" if r['hasFile'] else "monitored"
+        lines.append(f"  {label} {r['title']} ({r.get('year', '?')}) [{status}]")
+    if len(recommendations) > 15:
+        lines.append(f"  …and {len(recommendations) - 15} more.")
+    return "\n".join(lines)
+
+
 def _parse_tool_call_from_text(text):
     """Fallback: parse a tool call if the model outputs it as raw JSON text."""
     VALID_TOOLS = {
         'add_radarr_movie', 'add_sonarr_series', 'search_by_person', 'search_title_credits',
-        'delete_movie', 'delete_tv_series',
+        'delete_movie', 'delete_tv_series', 'recommend_similar',
     }
     match = re.search(r'\{\s*"name"\s*:\s*"(\w+)"\s*,\s*"arguments"\s*:\s*(\{[^}]+\})\s*\}', text)
     if not match:
@@ -1077,6 +1184,33 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
                     telemetry['heuristic_route'] = 'decade_filter_ambiguous'
                 return "\n".join(lines)
 
+    # --- Similarity / recommendation queries ---
+    _SIMILAR_PATTERNS = [
+        # "movies/shows similar to X" / "films similar to X"
+        re.compile(r'^(?:what\s+)?(?:movies?|films?|shows?|series|tv\s+shows?)\s+(?:are\s+)?similar\s+to\s+(.+?)\??$', re.IGNORECASE),
+        # "movies/films like X"
+        re.compile(r'^(?:what\s+)?(?:movies?|films?|shows?|series|tv\s+shows?)\s+(?:are\s+)?like\s+(.+?)\??$', re.IGNORECASE),
+        # "recommend ??? similar to X" / "recommend something like X"
+        re.compile(r'^recommend\s+(?:\w+\s+)*similar\s+to\s+(.+?)\??$', re.IGNORECASE),
+        re.compile(r'^recommend\s+(?:\w+\s+)*like\s+(.+?)\??$', re.IGNORECASE),
+        # "what is similar to X" / "what's similar to X"
+        re.compile(r"^what(?:'s|\s+is)\s+similar\s+to\s+(.+?)\??$", re.IGNORECASE),
+        # "anything similar to X" / "anything like X"
+        re.compile(r'^anything\s+(?:similar\s+to|like)\s+(.+?)\??$', re.IGNORECASE),
+        # "suggestions similar to X" / "suggestions like X"
+        re.compile(r'^(?:any\s+)?suggestions?\s+(?:similar\s+to|like)\s+(.+?)\??$', re.IGNORECASE),
+    ]
+    for pat in _SIMILAR_PATTERNS:
+        sm = pat.match(lowered)
+        if sm:
+            raw_phrase = sm.group(1)
+            ref_title = _normalize_title_phrase(raw_phrase)
+            if ref_title:
+                if telemetry is not None:
+                    telemetry['heuristic_route'] = 'recommend_similar'
+                media_type = _infer_media_type_from_query(lowered)
+                return recommend_similar_handler(ref_title, media_type=media_type, state=state)
+
     return None
 
 
@@ -1170,6 +1304,9 @@ def chat_with_llm(
                 "just a number (like 1, 2, or 3), treat that as their selection.\n"
                 "- When the user asks to DELETE or REMOVE a MOVIE, call delete_movie.\n"
                 "- When the user asks to DELETE or REMOVE a TV SERIES or TV SHOW, call delete_tv_series.\n"
+                "- When the user asks for movies or shows SIMILAR TO, LIKE, or RECOMMENDATIONS based on "
+                "a specific title, IMMEDIATELY call recommend_similar with the reference title. "
+                "Set media_type='movie' for movie-only requests, 'tv' for TV-only, or omit for both.\n"
                 "- For general questions, respond directly without calling any tools.\n"
                 "- Be concise."
                 + style_suffix
@@ -1266,6 +1403,12 @@ def chat_with_llm(
                             arguments.get("title"),
                             delete_files=arguments.get("delete_files", True),
                             user_info=user_info,
+                        )
+                    elif function_name == "recommend_similar":
+                        result = recommend_similar_handler(
+                            arguments.get("title"),
+                            media_type=arguments.get("media_type"),
+                            state=state,
                         )
                     else:
                         result = f"Unknown function: {function_name}"

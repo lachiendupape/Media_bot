@@ -340,7 +340,14 @@ What can I help with?</div>
                 }
 
                 if (data.github_issue && data.github_issue.url) {
-                    bugStatus.innerHTML = `Report saved with request ID ${data.request_id}. GitHub issue created: <a href="${data.github_issue.url}" target="_blank" rel="noopener noreferrer">#${data.github_issue.number}</a>`;
+                    bugStatus.textContent = '';
+                    bugStatus.appendChild(document.createTextNode(`Report saved with request ID ${data.request_id}. GitHub issue created: `));
+                    const issueLink = document.createElement('a');
+                    issueLink.href = data.github_issue.url;
+                    issueLink.target = '_blank';
+                    issueLink.rel = 'noopener noreferrer';
+                    issueLink.textContent = `#${data.github_issue.number}`;
+                    bugStatus.appendChild(issueLink);
                 } else if (bugCreateGitHubIssue.checked && data.github_issue_error) {
                     bugStatus.textContent = `Report saved with request ID ${data.request_id}, but GitHub issue creation failed: ${data.github_issue_error}`;
                 } else {
