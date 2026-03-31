@@ -510,10 +510,14 @@ def check_download_status_handler() -> str:
     # --- TV Series (Sonarr) ---
     try:
         tv_queue = sonarr.get_queue()
-        tv_records = (tv_queue or {}).get('records', [])
     except Exception as e:
-        tv_records = []
+        tv_queue = None
         lines.append(f"⚠️ Could not reach Sonarr: {e}")
+
+    if tv_queue is None:
+        tv_records = []
+    else:
+        tv_records = tv_queue.get('records', [])
 
     for item in tv_records:
         series = item.get('series') or {}

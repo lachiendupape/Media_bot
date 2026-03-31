@@ -74,6 +74,36 @@ def _init_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+# Retention constants — old records are pruned periodically to keep the DB small.
+_PENDING_DOWNLOAD_TTL_SECONDS = 24 * 3600   # 24 hours
+_NOTIFICATION_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+# Run cleanup at most once every 15 minutes to avoid overhead on high-frequency events.
+_CLEANUP_INTERVAL_SECONDS = 15 * 60
+_last_cleanup: float = 0.0
+
+
+def _cleanup_db(conn: sqlite3.Connection) -> None:
+    """Prune stale pending_downloads and old delivered notifications.
+
+    Called opportunistically from :func:`store_notification` at most once every
+    ``_CLEANUP_INTERVAL_SECONDS`` so the DB does not grow without bound over time.
+    """
+    global _last_cleanup
+    now = time.time()
+    if now - _last_cleanup < _CLEANUP_INTERVAL_SECONDS:
+        return
+    _last_cleanup = now
+    conn.execute(
+        "DELETE FROM pending_downloads WHERE requested_at < ?",
+        (int(now) - _PENDING_DOWNLOAD_TTL_SECONDS,),
+    )
+    conn.execute(
+        "DELETE FROM download_notifications WHERE delivered = 1 AND timestamp < ?",
+        (int(now) - _NOTIFICATION_TTL_SECONDS,),
+    )
+    conn.commit()
+
+
 def _ensure_db() -> None:
     with _lock:
         conn = _get_connection()
@@ -117,7 +147,10 @@ def record_pending_download(user_id: str, username: str, title: str, media_type:
 def find_requesting_user(title: str, media_type: str) -> tuple[str, str] | None:
     """Find the user who most recently requested a download of a given title.
 
-    Removes the matched record so it cannot be matched again.
+    The pending record is retained so that subsequent webhook calls for the same
+    title (e.g. per-episode Sonarr events) continue to route to the correct user.
+    Records are expired automatically after ``_PENDING_DOWNLOAD_TTL_SECONDS`` via
+    the cleanup logic in :func:`store_notification`.
 
     Args:
         title:      Media title to look up (case-insensitive).
@@ -131,14 +164,12 @@ def find_requesting_user(title: str, media_type: str) -> tuple[str, str] | None:
         conn = _get_connection()
         try:
             row = conn.execute(
-                "SELECT id, user_id, username FROM pending_downloads "
+                "SELECT user_id, username FROM pending_downloads "
                 "WHERE title_lower = ? AND media_type = ? "
                 "ORDER BY requested_at DESC LIMIT 1",
                 (title_lower, media_type),
             ).fetchone()
             if row:
-                conn.execute("DELETE FROM pending_downloads WHERE id = ?", (row["id"],))
-                conn.commit()
                 return row["user_id"], row["username"]
         finally:
             conn.close()
@@ -178,7 +209,8 @@ def store_notification(user_id: str, title: str, media_type: str, event_type: st
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (user_id, title, media_type, event_type, message, now),
             )
-            conn.commit()
+            # Prune stale records to keep the DB size bounded
+            _cleanup_db(conn)
         finally:
             conn.close()
     log.info(

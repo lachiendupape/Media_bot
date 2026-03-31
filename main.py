@@ -556,19 +556,17 @@ def get_notifications():
 
 
 def _check_webhook_auth() -> bool:
-    """Return True if the request carries a valid webhook secret (or none is required)."""
+    """Return True if the request carries a valid webhook secret (or none is required).
+
+    Only ``Authorization: Bearer <secret>`` header auth is supported.
+    Query-parameter auth is intentionally omitted because secrets in URLs
+    can leak via proxy logs and referrer headers.
+    """
     secret = config.WEBHOOK_SECRET
     if not secret:
         return True
     auth_header = request.headers.get('Authorization', '')
-    if auth_header.startswith('Bearer ') and hmac.compare_digest(auth_header[7:], secret):
-        return True
-    # For security, avoid passing secrets in URLs in production.
-    # In non-production environments, allow a query-parameter fallback for convenience.
-    env = os.getenv('FLASK_ENV', 'development')
-    if env != 'production' and hmac.compare_digest(request.args.get('secret', ''), secret):
-        return True
-    return False
+    return auth_header.startswith('Bearer ') and hmac.compare_digest(auth_header[7:], secret)
 
 
 def _process_download_event(title: str, media_type: str, success: bool, detail: str) -> None:
@@ -596,7 +594,7 @@ def webhook_radarr():
     if not _check_webhook_auth():
         return jsonify({'error': 'Unauthorized'}), 401
 
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     event_type = data.get('eventType', '')
 
     if event_type == 'Test':
@@ -643,7 +641,7 @@ def webhook_sonarr():
     if not _check_webhook_auth():
         return jsonify({'error': 'Unauthorized'}), 401
 
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     event_type = data.get('eventType', '')
 
     if event_type == 'Test':

@@ -214,11 +214,24 @@
             box-shadow: 0 4px 12px rgba(0,0,0,.4);
             opacity: 1;
             transition: opacity .4s;
+            /* Reset button defaults */
+            width: 100%;
+            text-align: left;
+            color: #e0e0e0;
+            font-family: inherit;
             cursor: pointer;
         }
+        .toast:focus-visible { outline: 2px solid #e5a00d; outline-offset: 2px; }
         .toast.success { border-left: 3px solid #4caf50; }
         .toast.failure { border-left: 3px solid #f44336; }
         .toast.health  { border-left: 3px solid #ff9800; }
+        .sr-only {
+            position: absolute;
+            width: 1px; height: 1px;
+            padding: 0; margin: -1px;
+            overflow: hidden; clip: rect(0,0,0,0);
+            white-space: nowrap; border: 0;
+        }
     </style>
 </head>
 <body>
@@ -234,7 +247,7 @@
             </div>
         </div>
     </header>
-    <div class="notification-banner" id="notificationBanner"></div>
+    <div class="notification-banner" id="notificationBanner" aria-live="polite" aria-label="Download notifications"></div>
     <div class="chat-area" id="chatArea">
         <div class="msg bot">Hi {{ user.username }}! I'm your <strong>{{ plex_server_name or 'Plex' }} library assistant</strong>. Here's what I can do:
 
@@ -449,17 +462,24 @@ What can I help with?</div>
         }
 
         function showToast(notification) {
-            const el = document.createElement('div');
+            const el = document.createElement('button');
+            el.type = 'button';
             el.className = 'toast ' + _toastClass(notification.event_type);
             el.textContent = notification.message;
-            el.title = 'Click to dismiss';
-            el.addEventListener('click', () => el.remove());
-            notificationBanner.appendChild(el);
-            // Auto-dismiss after TOAST_AUTO_DISMISS_MS
-            setTimeout(() => {
+            // Add a visually-hidden dismiss hint so screen readers know the button can be activated
+            const hint = document.createElement('span');
+            hint.className = 'sr-only';
+            hint.textContent = ' (press to dismiss)';
+            el.appendChild(hint);
+            function dismiss() {
                 el.style.opacity = '0';
                 setTimeout(() => el.remove(), TOAST_FADE_MS);
-            }, TOAST_AUTO_DISMISS_MS);
+            }
+            el.addEventListener('click', dismiss);
+            el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dismiss(); } });
+            notificationBanner.appendChild(el);
+            // Auto-dismiss after TOAST_AUTO_DISMISS_MS
+            setTimeout(dismiss, TOAST_AUTO_DISMISS_MS);
         }
 
         async function pollNotifications() {
