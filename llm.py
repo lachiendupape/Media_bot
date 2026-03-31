@@ -365,7 +365,7 @@ def _apply_speaking_style(text: str, style: str) -> str:
         )
         return restyle_response.choices[0].message.content or text
     except Exception:
-        log.warning("Failed to apply speaking style '%s'", style, exc_info=True)
+        log.warning("Failed to apply speaking style '%s'", style)
         return text
 
 
@@ -446,6 +446,7 @@ def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: boo
     )
     if result:
         quota.record_download(user_id, username, "movie", selected_movie['title'])
+        notifications.record_pending_download(user_id, username, selected_movie['title'], "movie")
         return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
     if error == 'already_exists':
         return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
@@ -626,6 +627,7 @@ def add_sonarr_series_handler(
 
     if result:
         quota.record_download(user_id, username, "tv_series", selected_series['title'])
+        notifications.record_pending_download(user_id, username, selected_series['title'], "tv_season")
         return f"Great news! '{selected_series['title']}' Season {season} has been grabbed and is downloading now — it'll be with you shortly!"
     if error == 'already_exists':
         # Series exists in library — check if the requested season is already monitored
@@ -645,6 +647,7 @@ def add_sonarr_series_handler(
             if updated:
                 sonarr.search_season(existing['id'], season)
                 quota.record_download(user_id, username, "tv_series", existing['title'])
+                notifications.record_pending_download(user_id, username, existing['title'], "tv_season")
                 return (
                     f"Great news! '{existing['title']}' Season {season} has been grabbed "
                     f"and is downloading now — it'll be with you shortly!"
