@@ -30,12 +30,12 @@ class SonarrAPI:
         response = _session.put(url, json=json_data, params={'apiKey': self.api_key}, timeout=timeout)
         return response
 
-    def _delete(self, path, params=None, timeout=_TIMEOUT):
+    def _delete(self, path, params=None, json_data=None, timeout=_TIMEOUT):
         url = f"{self.base_url}{path}"
         p = {'apiKey': self.api_key}
         if params:
             p.update(params)
-        response = _session.delete(url, params=p, timeout=timeout)
+        response = _session.delete(url, params=p, json=json_data, timeout=timeout)
         return response
 
     def get_system_status(self):
@@ -117,6 +117,42 @@ class SonarrAPI:
             return True
         except requests.exceptions.RequestException as e:
             print(f"Error deleting series from Sonarr: {e}")
+            return False
+
+    def get_episode_files(self, series_id, season_number=None):
+        """Get episode files for a series. Optionally filter by season_number. Returns list or None on error."""
+        try:
+            params = {'seriesId': series_id}
+            if season_number is not None:
+                params['seasonNumber'] = season_number
+            return self._get('/api/v3/episodefile', params=params)
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting episode files from Sonarr: {e}")
+            return None
+
+    def delete_episode_files_bulk(self, file_ids):
+        """Delete multiple episode files by ID. Returns True on success."""
+        try:
+            response = self._delete('/api/v3/episodefile/bulk', json_data={'episodeFileIds': file_ids})
+            response.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            print(f"Error bulk-deleting episode files from Sonarr: {e}")
+            return False
+
+    def unmonitor_season(self, series_id, season_number):
+        """Unmonitor a specific season for a series in Sonarr. Returns True on success."""
+        try:
+            series_data = self._get(f'/api/v3/series/{series_id}')
+            for season in series_data.get('seasons', []):
+                if season['seasonNumber'] == season_number:
+                    season['monitored'] = False
+                    break
+            response = self._put(f'/api/v3/series/{series_id}', series_data)
+            response.raise_for_status()
+            return True
+        except requests.exceptions.RequestException as e:
+            print(f"Error unmonitoring season in Sonarr: {e}")
             return False
 
     def get_series_by_tvdb_id(self, tvdb_id):
