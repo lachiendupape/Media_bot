@@ -167,8 +167,9 @@ def store_notification(user_id: str, title: str, media_type: str, event_type: st
             # Deduplicate: skip if an identical undelivered notification was already stored in the last hour
             existing = conn.execute(
                 "SELECT id FROM download_notifications "
-                "WHERE user_id = ? AND title = ? AND event_type = ? AND delivered = 0 AND timestamp > ?",
-                (user_id, title, event_type, one_hour_ago),
+                "WHERE user_id = ? AND title = ? AND media_type = ? AND event_type = ? AND message = ? "
+                "AND delivered = 0 AND timestamp > ?",
+                (user_id, title, media_type, event_type, message, one_hour_ago),
             ).fetchone()
             if existing:
                 return
