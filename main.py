@@ -52,6 +52,7 @@ if os.getenv('FLASK_ENV') == 'production':
     app.config['SESSION_COOKIE_SECURE'] = True
 
 BOT_API_KEY = os.getenv('BOT_API_KEY')
+_SERVER_START_TIME = time.time()
 _RECENT_REQUESTS = OrderedDict()
 _RECENT_REQUEST_LIMIT = 200
 _API_KEY_CHAT_STATES = OrderedDict()
@@ -518,10 +519,24 @@ def bug_report():
 
 @app.route('/health', methods=['GET'])
 def health():
+    uptime_seconds = int(time.time() - _SERVER_START_TIME)
+    days, rem = divmod(uptime_seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    parts.append(f"{secs}s")
     return jsonify({
         "status": "running",
         "service": "Media Bot LLM",
-        "credit_cache": "ready" if credit_cache.ready else "building"
+        "credit_cache": "ready" if credit_cache.ready else "building",
+        "uptime": " ".join(parts),
+        "uptime_seconds": uptime_seconds,
     })
 
 @app.route('/cache/rebuild', methods=['POST'])
