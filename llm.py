@@ -470,11 +470,18 @@ def check_download_status_handler() -> str:
     # --- Movies (Radarr) ---
     try:
         movie_queue = radarr.get_queue()
-        movie_records = (movie_queue or {}).get('records', [])
     except Exception as e:
-        movie_records = []
+        movie_queue = None
         lines.append(f"⚠️ Could not reach Radarr: {e}")
 
+    if movie_queue is None:
+        # Treat a None queue as an error condition rather than as an empty queue.
+        # If no specific Radarr warning has been added yet, add a generic one.
+        if not any("Radarr" in line for line in lines):
+            lines.append("⚠️ Could not reach Radarr (queue unavailable)")
+        movie_records = []
+    else:
+        movie_records = movie_queue.get('records', [])
     for item in movie_records:
         movie = item.get('movie') or {}
         title = movie.get('title') or item.get('title', 'Unknown')
