@@ -60,6 +60,27 @@ class RadarrAPI:
             print(f"Error getting root folder from Radarr: {e}")
             return None
 
+    def get_root_folders(self):
+        """Gets all root folders from Radarr."""
+        try:
+            return self._get('/api/v3/rootfolder')
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting root folders from Radarr: {e}")
+            return []
+
+    def get_root_folder_by_path(self, preferred_path):
+        """Return the root folder matching *preferred_path*, else first available."""
+        roots = self.get_root_folders()
+        if not roots:
+            return None
+        if preferred_path:
+            target = preferred_path.strip().lower().rstrip('/')
+            for folder in roots:
+                path = str(folder.get('path', '')).strip().lower().rstrip('/')
+                if path == target:
+                    return folder
+        return roots[0]
+
     def get_disk_space(self):
         """Gets disk space info for all mounts from Radarr."""
         try:
@@ -82,6 +103,36 @@ class RadarrAPI:
             return self._get('/api/v3/qualityprofile')
         except requests.exceptions.RequestException as e:
             print(f"Error getting quality profiles from Radarr: {e}")
+            return None
+
+    def get_quality_profile_by_name(self, profile_name):
+        """Return a quality profile matching *profile_name*, else first available."""
+        profiles = self.get_quality_profiles() or []
+        if not profiles:
+            return None
+        if profile_name:
+            wanted = profile_name.strip().lower()
+            for profile in profiles:
+                if str(profile.get('name', '')).strip().lower() == wanted:
+                    return profile
+            for profile in profiles:
+                if wanted in str(profile.get('name', '')).strip().lower():
+                    return profile
+        return profiles[0]
+
+    def _get_tag_id(self, label):
+        """Get or create a Radarr tag ID by label."""
+        try:
+            existing = self._get('/api/v3/tag')
+            for tag in existing:
+                if str(tag.get('label', '')).strip().lower() == label.strip().lower():
+                    return tag.get('id')
+            response = self._post('/api/v3/tag', {'label': label})
+            response.raise_for_status()
+            created = response.json()
+            return created.get('id')
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting/creating Radarr tag '{label}': {e}")
             return None
 
     def get_library_movies(self):
@@ -126,12 +177,24 @@ class RadarrAPI:
             print(f"Error deleting movie from Radarr: {e}")
             return False
 
-    def add_movie(self, movie, root_folder_path, quality_profile_id):
+    def add_movie(
+        self,
+        movie,
+        root_folder_path,
+        quality_profile_id,
+        minimum_availability='released',
+        tags=None,
+    ):
         """Adds a movie to Radarr. Returns (result_dict, None) on success,
         (None, error_message) on failure."""
+        movie = dict(movie)
         movie['rootFolderPath'] = root_folder_path
         movie['qualityProfileId'] = quality_profile_id
         movie['monitored'] = True
+        movie['minimumAvailability'] = minimum_availability
+        if tags:
+            tag_ids = [self._get_tag_id(tag) for tag in tags]
+            movie['tags'] = [tag_id for tag_id in tag_ids if tag_id is not None]
         movie['addOptions'] = {'searchForMovie': True}
 
         try:

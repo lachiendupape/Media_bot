@@ -38,6 +38,10 @@ tools = [
                     "title": {
                         "type": "string",
                         "description": "The title of the movie to search for and add."
+                    },
+                    "is_kids": {
+                        "type": "boolean",
+                        "description": "Set true when this should be added to kids media folders."
                     }
                 },
                 "required": ["title"]
@@ -59,6 +63,10 @@ tools = [
                     "season": {
                         "type": "integer",
                         "description": "The season number to add. Omit to see available seasons."
+                    },
+                    "is_kids": {
+                        "type": "boolean",
+                        "description": "Set true when this should be added to kids media folders."
                     }
                 },
                 "required": ["title"]
@@ -241,6 +249,18 @@ _STYLE_SET_PATTERNS = [
     re.compile(r"\b(\w+)\s+style\b"),
 ]
 
+_KIDS_HINT_PATTERN = re.compile(
+    r"\b(kids?|children|child|family|disney|pixar|animated|cartoon|young\s+kids?)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _looks_like_kids_request(title: str, is_kids: bool | None = None) -> bool:
+    """Infer kids routing when caller did not explicitly provide *is_kids*."""
+    if is_kids is not None:
+        return bool(is_kids)
+    return bool(_KIDS_HINT_PATTERN.search(title or ""))
+
 
 def _detect_style_command(message: str) -> tuple[str | None, bool]:
     """Detect if *message* is a speaking-style change command.
@@ -356,6 +376,7 @@ def add_radarr_movie_handler(
     preferred_tmdb_id: int = None,
     preferred_year: int = None,
     user_info: dict = None,
+    is_kids: bool | None = None,
 ) -> str:
     ok, msg = _check_disk_space()
     if not ok:
@@ -366,6 +387,7 @@ def add_radarr_movie_handler(
     if not allowed:
         return quota_msg
 
+    is_kids_request = _looks_like_kids_request(title, is_kids)
     radarr = RadarrAPI()
     movies = radarr.lookup_movie(title)
     if not movies:
@@ -383,6 +405,7 @@ def add_radarr_movie_handler(
             state.pop('pending_series_pick', None)
             state['pending_movie_add'] = {
                 'query': title,
+                'is_kids': is_kids_request,
                 'options': [
                     {
                         'title': m.get('title', '?'),
@@ -400,16 +423,26 @@ def add_radarr_movie_handler(
 
     if selected_movie is None:
         selected_movie = movies[0]
-    root_folder = radarr.get_root_folder()
+    preferred_root = config.RADARR_KIDS_MOVIE_ROOT if is_kids_request else config.RADARR_MOVIE_ROOT
+    root_folder = radarr.get_root_folder_by_path(preferred_root)
     if not root_folder:
         return "Failed to retrieve Radarr root folder."
 
-    quality_profiles = radarr.get_quality_profiles()
-    if not quality_profiles:
+    quality_profile = radarr.get_quality_profile_by_name(config.RADARR_DEFAULT_QUALITY_PROFILE)
+    if not quality_profile:
         return "Failed to retrieve Radarr quality profiles."
 
-    quality_profile_id = quality_profiles[0]['id']
-    result, error = radarr.add_movie(selected_movie, root_folder['path'], quality_profile_id)
+    tags = [config.MEDIA_BOT_TAG]
+    if is_kids_request:
+        tags.append(config.KIDS_CONTENT_TAG)
+
+    result, error = radarr.add_movie(
+        selected_movie,
+        root_folder['path'],
+        quality_profile['id'],
+        minimum_availability=config.RADARR_MINIMUM_AVAILABILITY,
+        tags=tags,
+    )
     if result:
         quota.record_download(user_id, username, "movie", selected_movie['title'])
         return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
@@ -424,16 +457,18 @@ def add_sonarr_series_handler(
     preferred_tvdb_id: int = None,
     preferred_year: int = None,
     user_info: dict = None,
+    is_kids: bool | None = None,
 ) -> str:
     ok, msg = _check_disk_space()
     if not ok:
         return msg
 
     user_id, username = _user_identity(user_info)
-    allowed, quota_msg = quota.check_quota(user_id, username, "tv_season")
+    allowed, quota_msg = quota.check_quota(user_id, username, "tv_series")
     if not allowed:
         return quota_msg
 
+    is_kids_request = _looks_like_kids_request(title, is_kids)
     sonarr = SonarrAPI()
     series = sonarr.lookup_series(title)
     if not series:
@@ -451,6 +486,7 @@ def add_sonarr_series_handler(
             state.pop('pending_movie_add', None)
             state['pending_series_pick'] = {
                 'query': title,
+                'is_kids': is_kids_request,
                 'options': [
                     {
                         'title': s.get('title', '?'),
@@ -480,6 +516,7 @@ def add_sonarr_series_handler(
                 'title': selected_series.get('title', title),
                 'year': selected_series.get('year'),
                 'tvdbId': selected_series.get('tvdbId'),
+                'is_kids': is_kids_request,
                 'available_seasons': sorted(s['seasonNumber'] for s in seasons),
             }
         season_list = ", ".join(str(s['seasonNumber']) for s in seasons)
@@ -497,19 +534,30 @@ def add_sonarr_series_handler(
     if state is not None:
         state.pop('pending_series_add', None)
 
-    root_folder = sonarr.get_root_folder()
+    preferred_root = config.SONARR_KIDS_TV_ROOT if is_kids_request else config.SONARR_TV_ROOT
+    root_folder = sonarr.get_root_folder_by_path(preferred_root)
     if not root_folder:
         return "Failed to retrieve Sonarr root folder."
 
-    quality_profiles = sonarr.get_quality_profiles()
-    if not quality_profiles:
+    quality_profile = sonarr.get_quality_profile_by_name(config.SONARR_DEFAULT_QUALITY_PROFILE)
+    if not quality_profile:
         return "Failed to retrieve Sonarr quality profiles."
 
-    quality_profile_id = quality_profiles[0]['id']
-    result, error = sonarr.add_series(selected_series, root_folder['path'], quality_profile_id, season_number=season)
+    tags = [config.MEDIA_BOT_TAG]
+    if is_kids_request:
+        tags.append(config.KIDS_CONTENT_TAG)
+
+    result, error = sonarr.add_series(
+        selected_series,
+        root_folder['path'],
+        quality_profile['id'],
+        season_number=season,
+        series_type=config.SONARR_SERIES_TYPE,
+        tags=tags,
+    )
 
     if result:
-        quota.record_download(user_id, username, "tv_season", f"{selected_series['title']} S{season:02d}")
+        quota.record_download(user_id, username, "tv_series", selected_series['title'])
         return f"Great news! '{selected_series['title']}' Season {season} has been grabbed and is downloading now — it'll be with you shortly!"
     if error == 'already_exists':
         # Series exists in library — check if the requested season is already monitored
@@ -528,7 +576,7 @@ def add_sonarr_series_handler(
             updated, update_error = sonarr.update_series(existing['id'], existing)
             if updated:
                 sonarr.search_season(existing['id'], season)
-                quota.record_download(user_id, username, "tv_season", f"{existing['title']} S{season:02d}")
+                quota.record_download(user_id, username, "tv_series", existing['title'])
                 return (
                     f"Great news! '{existing['title']}' Season {season} has been grabbed "
                     f"and is downloading now — it'll be with you shortly!"
@@ -731,6 +779,7 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
             preferred_tmdb_id=picked.get('tmdbId'),
             preferred_year=picked.get('year'),
             user_info=user_info,
+            is_kids=pending_movie.get('is_kids'),
         )
 
     # Pending series disambiguation for add_sonarr_series flow.
@@ -748,6 +797,7 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
             preferred_tvdb_id=picked.get('tvdbId'),
             preferred_year=picked.get('year'),
             user_info=user_info,
+            is_kids=pending_series_pick.get('is_kids'),
         )
 
     # Pending season selection for add_sonarr_series flow.
@@ -769,6 +819,7 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
                 preferred_tvdb_id=pending_series.get('tvdbId'),
                 preferred_year=pending_series.get('year'),
                 user_info=user_info,
+                is_kids=pending_series.get('is_kids'),
             )
 
     pending = state.get('pending_title_lookup')
@@ -1095,6 +1146,10 @@ def chat_with_llm(
                 "If the user specifies a season number, include it. If they don't specify a season, "
                 "call it WITHOUT the season parameter first to see available seasons, then tell the "
                 "user which seasons are available and ask them which one they'd like.\n"
+                "- Use is_kids=true for movie/show requests that are clearly for kids or family content.\n"
+                "- Media defaults are enforced automatically: movies use released availability and HD-1080p profile; "
+                "series use standard type and HD-720p/1080p profile.\n"
+                "- Per-user daily limits are enforced: 3 movies and 1 TV series, resetting at midnight UTC.\n"
                 "- When the user replies with a season number for a show you already looked up, "
                 "call add_sonarr_series again WITH the season parameter.\n"
                 "- When the user asks what movies or shows star a particular ACTOR or ACTRESS, "
@@ -1164,13 +1219,19 @@ def chat_with_llm(
                 
                 with start_span('llm.tool_execution', {'tool.name': function_name}):
                     if function_name == "add_radarr_movie":
-                        result = add_radarr_movie_handler(arguments.get("title"), state=state, user_info=user_info)
+                        result = add_radarr_movie_handler(
+                            arguments.get("title"),
+                            state=state,
+                            user_info=user_info,
+                            is_kids=arguments.get("is_kids"),
+                        )
                     elif function_name == "add_sonarr_series":
                         result = add_sonarr_series_handler(
                             arguments.get("title"),
                             season=arguments.get("season"),
                             state=state,
                             user_info=user_info,
+                            is_kids=arguments.get("is_kids"),
                         )
                     elif function_name == "search_by_person":
                         requested_media_type = arguments.get("media_type")
