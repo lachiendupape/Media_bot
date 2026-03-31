@@ -493,7 +493,8 @@ def bug_report():
             github_issue = _create_github_issue(report, debug_context)
             report['github_issue'] = github_issue
         except requests.RequestException as exc:
-            github_issue_error = str(exc)
+            github_issue_error = "Could not create GitHub issue. Check server logs for details."
+            log.warning("GitHub issue creation failed: %s", exc)
             report['github_issue_error'] = github_issue_error
 
     append_jsonl(config.BUG_REPORTS_FILE, report)

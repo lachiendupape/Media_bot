@@ -322,12 +322,18 @@ I’m only working with your own library and connected services, not the wider i
             version: '{{ app_version }}',
         };
 
+        const MAX_CHAT_MESSAGES = 150;
+
         function addMsg(text, cls) {
             const el = document.createElement('div');
             el.className = 'msg ' + cls;
             el.textContent = text;
             chatArea.appendChild(el);
             chatArea.scrollTop = chatArea.scrollHeight;
+            // Evict oldest messages to cap DOM size
+            while (chatArea.children.length > MAX_CHAT_MESSAGES) {
+                chatArea.removeChild(chatArea.firstChild);
+            }
             return el;
         }
 
@@ -479,6 +485,7 @@ I’m only working with your own library and connected services, not the wider i
         const TOAST_AUTO_DISMISS_MS = 12000;
         const TOAST_FADE_MS = 400;
         const NOTIFICATION_POLL_INTERVAL_MS = 30000;
+        const MAX_TOASTS = 10;
 
         function _toastClass(eventType) {
             if (eventType === 'downloaded') return 'success';
@@ -487,29 +494,41 @@ I’m only working with your own library and connected services, not the wider i
         }
 
         function showToast(notification) {
+            // Evict oldest toasts to cap DOM size
+            while (notificationBanner.children.length >= MAX_TOASTS) {
+                notificationBanner.removeChild(notificationBanner.firstChild);
+            }
             const el = document.createElement('button');
             el.type = 'button';
             el.className = 'toast ' + _toastClass(notification.event_type);
             el.textContent = notification.message;
-            // Add a visually-hidden dismiss hint so screen readers know the button can be activated
             const hint = document.createElement('span');
             hint.className = 'sr-only';
             hint.textContent = ' (press to dismiss)';
             el.appendChild(hint);
+            let dismissed = false;
             function dismiss() {
+                if (dismissed) return;
+                dismissed = true;
                 el.style.opacity = '0';
-                setTimeout(() => el.remove(), TOAST_FADE_MS);
+                setTimeout(() => {
+                    el.remove();
+                }, TOAST_FADE_MS);
             }
             el.addEventListener('click', dismiss);
             el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); dismiss(); } });
             notificationBanner.appendChild(el);
-            // Auto-dismiss after TOAST_AUTO_DISMISS_MS
             setTimeout(dismiss, TOAST_AUTO_DISMISS_MS);
         }
 
+        // Use a single AbortController so each poll cancels any in-flight request
+        let _pollController = null;
+
         async function pollNotifications() {
+            if (_pollController) _pollController.abort();
+            _pollController = new AbortController();
             try {
-                const res = await fetch('/notifications');
+                const res = await fetch('/notifications', { signal: _pollController.signal });
                 if (!res.ok) return;
                 const data = await res.json();
                 if (data.notifications && data.notifications.length > 0) {
@@ -518,13 +537,32 @@ I’m only working with your own library and connected services, not the wider i
                     }
                 }
             } catch (_) {
-                // Silently ignore polling errors (e.g. network hiccup)
+                // Silently ignore polling errors and aborts
             }
         }
 
-        // Poll immediately on page load, then every NOTIFICATION_POLL_INTERVAL_MS
+        // Use setTimeout chain instead of setInterval to prevent overlapping polls.
+        // Pause polling when the tab is hidden (Page Visibility API).
+        let _pollTimer = null;
+        function schedulePoll() {
+            _pollTimer = setTimeout(async () => {
+                await pollNotifications();
+                if (!document.hidden) schedulePoll();
+            }, NOTIFICATION_POLL_INTERVAL_MS);
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                clearTimeout(_pollTimer);
+                _pollTimer = null;
+            } else {
+                // Tab visible again — poll immediately then resume schedule
+                pollNotifications();
+                if (!_pollTimer) schedulePoll();
+            }
+        });
+        // Initial poll on page load
         pollNotifications();
-        setInterval(pollNotifications, NOTIFICATION_POLL_INTERVAL_MS);
+        schedulePoll();
     </script>
 </body>
 </html>

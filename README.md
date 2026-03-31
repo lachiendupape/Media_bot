@@ -17,6 +17,8 @@ A natural-language media library assistant that lets you search and manage your 
 - **Disk space guard** -- blocks new downloads when any disk drops below 5% free space.
 - **User bug reports** -- the chat UI can send issue reports with request IDs and optional debug context.
 - **GitHub issue creation** -- bug reports can optionally create a GitHub issue when a repo and token are configured.
+- **Download notifications** -- tracks who requested each download and delivers completion or failure notifications via in-chat banners and a polling endpoint. Radarr/Sonarr webhooks route events back to the requesting user.
+- **Speaking styles** -- change how the bot responds with commands like "speak like a pirate", "robot mode", or "reset style". Supported styles: pirate, robot, sarcastic, shakespearean, enthusiastic.
 - **Structured observability** -- JSON logs, request correlation IDs, optional Sentry errors, and optional OpenTelemetry traces.
 - **Plex OAuth login** -- browser-based sign-in using your Plex account; only users with access to your server can use the bot.
 - **API key access** -- programmatic access via `X-Api-Key` header for scripts and automation.
@@ -95,6 +97,7 @@ At minimum you need to set:
 | `GITHUB_ISSUES_REPO` | Optional GitHub repo for issue creation, in `owner/repo` format |
 | `GITHUB_ISSUES_TOKEN` | Optional GitHub token with permission to create issues |
 | `GITHUB_ISSUE_LABELS` | Optional comma-separated labels for created issues |
+| `WEBHOOK_SECRET` | Shared secret for Radarr/Sonarr webhook endpoints |
 | `QUOTA_ENABLED` | Set to `true` to enforce per-user daily download limits |
 | `DAILY_MOVIE_QUOTA` | Max movie downloads per user per day (0 = unlimited) |
 | `DAILY_TV_SERIES_QUOTA` | Max TV series downloads per user per day (0 = unlimited) |
@@ -202,6 +205,9 @@ curl -X POST http://localhost:5000/chat \
 | POST | `/bug-report` | Session or API key | Submit a user bug report with optional debug context |
 | GET | `/health` | None | Service health check |
 | POST | `/cache/rebuild` | Session or API key | Rebuild the credit cache |
+| GET | `/notifications` | Session or API key | Poll for pending download notifications |
+| POST | `/webhooks/radarr` | None (if `WEBHOOK_SECRET` unset) / Webhook secret | Radarr download/health event webhook |
+| POST | `/webhooks/sonarr` | None (if `WEBHOOK_SECRET` unset) / Webhook secret | Sonarr download/health event webhook |
 | GET | `/auth/login` | None | Plex login page |
 | GET | `/auth/start` | None | Initiate Plex OAuth flow |
 | GET | `/auth/callback` | None | Plex OAuth callback |
@@ -243,8 +249,10 @@ falls back to a local Docker build using the same target image tag.
 
 ```
 Media_bot/
-  main.py            -- Flask server, routes, authentication
+  main.py            -- Flask server, routes, authentication, webhooks
   llm.py             -- LLM integration, tool schemas, handlers
+  notifications.py   -- Download notification tracking and delivery
+  quota.py           -- Per-user daily download quota management
   plex_auth.py       -- Plex OAuth PIN-based authentication
   config.py          -- Environment variable loading and validation
   observability.py   -- Structured logging, tracing, and bug-report helpers
