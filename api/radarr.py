@@ -60,6 +60,14 @@ class RadarrAPI:
             print(f"Error getting root folder from Radarr: {e}")
             return None
 
+    def get_root_folders(self):
+        """Gets all root folders from Radarr."""
+        try:
+            return self._get('/api/v3/rootfolder')
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting root folders from Radarr: {e}")
+            return None
+
     def get_disk_space(self):
         """Gets disk space info for all mounts from Radarr."""
         try:
