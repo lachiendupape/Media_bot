@@ -162,13 +162,21 @@ tools = [
         "type": "function",
         "function": {
             "name": "delete_tv_series",
-            "description": "Removes a TV series from the Sonarr library. Only the server owner may call this.",
+            "description": (
+                "Removes a TV series or a specific season of a TV series from the Sonarr library. "
+                "If a season number is provided, only that season is unmonitored and its files are deleted. "
+                "If no season is given, the entire series is removed. Only the server owner may call this."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {
                         "type": "string",
                         "description": "The title of the TV series to delete."
+                    },
+                    "season": {
+                        "type": "integer",
+                        "description": "The season number to delete. Omit to delete the entire series."
                     },
                     "delete_files": {
                         "type": "boolean",
@@ -934,7 +942,7 @@ def delete_movie_handler(title: str, delete_files: bool = True, user_info: dict 
     return f"Failed to delete '{movie['title']}'. Please check Radarr."
 
 
-def delete_tv_series_handler(title: str, delete_files: bool = True, user_info: dict = None) -> str:
+def delete_tv_series_handler(title: str, season: int = None, delete_files: bool = True, user_info: dict = None) -> str:
     if not _is_owner(user_info):
         return "❌ Sorry, only the server owner can delete media."
 
@@ -950,6 +958,47 @@ def delete_tv_series_handler(title: str, delete_files: bool = True, user_info: d
         return f"Multiple series found matching '{title}': {titles}. Please be more specific."
 
     series = matches[0]
+
+    # Season-specific deletion: unmonitor the season and optionally delete its files
+    if season is not None:
+        all_seasons = series.get('seasons', [])
+        real_seasons = [s for s in all_seasons if s['seasonNumber'] > 0]
+        season_exists = any(s['seasonNumber'] == season for s in real_seasons)
+        if not season_exists:
+            valid = sorted(s['seasonNumber'] for s in real_seasons)
+            return (
+                f"Season {season} doesn't exist for '{series['title']}'. "
+                f"Available seasons: {', '.join(str(n) for n in valid)}."
+            )
+
+        unmonitored = sonarr.unmonitor_season(series['id'], season)
+        if not unmonitored:
+            return f"Failed to unmonitor Season {season} of '{series['title']}'. Please check Sonarr."
+
+        files_deleted = False
+        if delete_files:
+            episode_files = sonarr.get_episode_files(series['id'], season_number=season)
+            if episode_files is None:
+                # API error fetching files
+                files_deleted = False
+            elif not episode_files:
+                # No files on disk — nothing to delete, treat as success
+                files_deleted = True
+            else:
+                file_ids = [f['id'] for f in episode_files]
+                files_deleted = sonarr.delete_episode_files_bulk(file_ids)
+
+        if delete_files and not files_deleted:
+            return (
+                f"✅ Season {season} of '{series['title']}' has been unmonitored, "
+                f"but its files could not be deleted. Please check Sonarr."
+            )
+        return (
+            f"✅ Season {season} of '{series['title']}' has been unmonitored and "
+            f"{'its files deleted from disk' if delete_files else 'kept on disk'}."
+        )
+
+    # Full series deletion
     success = sonarr.delete_series(series['id'], delete_files=delete_files)
     if success:
         return f"✅ '{series['title']} ({series.get('year', '')})' has been removed from your library."
@@ -1354,7 +1403,10 @@ def chat_with_llm(
                 "- If you ask the user to choose between multiple title matches, and they reply with "
                 "just a number (like 1, 2, or 3), treat that as their selection.\n"
                 "- When the user asks to DELETE or REMOVE a MOVIE, call delete_movie.\n"
-                "- When the user asks to DELETE or REMOVE a TV SERIES or TV SHOW, call delete_tv_series.\n"
+                "- When the user asks to DELETE or REMOVE a TV SERIES, TV SHOW, or a specific SEASON "
+                "of a TV show (e.g. 'delete season 2 of Lost' or 'remove Lost season 2'), call "
+                "delete_tv_series. Include the season number in the 'season' parameter when a "
+                "specific season is mentioned. NEVER call add_sonarr_series for a delete/remove request.\n"
                 "- When the user asks for movies or shows SIMILAR TO, LIKE, or RECOMMENDATIONS based on "
                 "a specific title, IMMEDIATELY call recommend_similar with the reference title. "
                 "Set media_type='movie' for movie-only requests, 'tv' for TV-only, or omit for both.\n"
@@ -1452,6 +1504,7 @@ def chat_with_llm(
                     elif function_name == "delete_tv_series":
                         result = delete_tv_series_handler(
                             arguments.get("title"),
+                            season=arguments.get("season"),
                             delete_files=arguments.get("delete_files", True),
                             user_info=user_info,
                         )
