@@ -11,7 +11,9 @@ A natural-language media library assistant that lets you search and manage your 
 - **Reverse title lookup** -- ask who starred in or directed a specific movie/TV title in your library.
 - **Recommendations** -- ask for movies or shows similar to a title in your library; the bot finds titles sharing cast or directors.
 - **Delete media (owner only)** -- the Plex server owner can remove movies or TV series (with file deletion) through the chat.
-- **Download quotas** -- optional per-user daily download limits for movies and TV seasons, with per-user overrides and UTC midnight reset.
+- **Default media request profiles** -- applies configured Radarr/Sonarr roots, quality profiles, tags, and minimum availability automatically.
+- **Kids routing** -- routes kids movies and shows into dedicated root folders, with optional prompt-based confirmation for movies.
+- **Download quotas** -- optional per-user daily download limits for movies and TV series, with per-user overrides and UTC midnight reset.
 - **Disk space guard** -- blocks new downloads when any disk drops below 5% free space.
 - **User bug reports** -- the chat UI can send issue reports with request IDs and optional debug context.
 - **GitHub issue creation** -- bug reports can optionally create a GitHub issue when a repo and token are configured.
@@ -95,7 +97,22 @@ At minimum you need to set:
 | `GITHUB_ISSUE_LABELS` | Optional comma-separated labels for created issues |
 | `QUOTA_ENABLED` | Set to `true` to enforce per-user daily download limits |
 | `DAILY_MOVIE_QUOTA` | Max movie downloads per user per day (0 = unlimited) |
-| `DAILY_TV_SEASON_QUOTA` | Max TV season downloads per user per day (0 = unlimited) |
+| `DAILY_TV_SERIES_QUOTA` | Max TV series downloads per user per day (0 = unlimited) |
+
+Useful optional defaults for automated media adds:
+
+| Variable | Description |
+|----------|-------------|
+| `MEDIA_BOT_TAG` | Tag applied to all bot-created requests |
+| `KIDS_CONTENT_TAG` | Additional tag applied to kids requests |
+| `RADARR_MOVIE_ROOT` | Default Radarr movie root folder |
+| `RADARR_KIDS_MOVIE_ROOT` | Radarr root folder for kids movies |
+| `RADARR_DEFAULT_QUALITY_PROFILE` | Default Radarr quality profile name |
+| `RADARR_MINIMUM_AVAILABILITY` | Default Radarr minimum availability (for example `released`) |
+| `SONARR_TV_ROOT` | Default Sonarr TV root folder |
+| `SONARR_KIDS_TV_ROOT` | Sonarr root folder for kids TV |
+| `SONARR_DEFAULT_QUALITY_PROFILE` | Default Sonarr quality profile name |
+| `SONARR_SERIES_TYPE` | Default Sonarr series type (for example `standard`) |
 
 Generate a secret key:
 
@@ -199,7 +216,7 @@ curl -X POST http://localhost:5000/chat \
 Typical workflow:
 
 1. Develop and test locally with `docker-compose.dev.yml`.
-2. Merge to `main` when ready.
+2. Merge to `master` when ready.
 3. Create and push a version tag (for example `v1.3.0`).
 4. GitHub Actions builds and publishes `ghcr.io/lachiendupape/media-bot:v1.3.0`.
 5. Deploy from git ref/tag on host with the deploy script.
