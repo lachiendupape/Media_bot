@@ -116,6 +116,8 @@ class SonarrAPI:
 
     def _get_tag_id(self, label):
         """Get or create a Sonarr tag ID by label."""
+        if not label or not str(label).strip():
+            return None
         try:
             existing = self._get('/api/v3/tag')
             for tag in existing:

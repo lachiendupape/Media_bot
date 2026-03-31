@@ -83,9 +83,11 @@ def _today_utc() -> str:
 
 def _normalize_media_type(media_type: str) -> str:
     """Normalize supported media types to internal counters."""
+    if media_type == "movie":
+        return "movie"
     if media_type in {"tv_series", "tv_season"}:
         return "tv_series"
-    return "movie"
+    return media_type
 
 
 def _get_limit(user_id: str, media_type: str) -> int:
@@ -203,11 +205,6 @@ def record_download(user_id: str, username: str, media_type: str, title: str) ->
             conn.commit()
         finally:
             conn.close()
-
-    log.info(
-        "quota.record_download",
-        extra={"user_id": user_id, "username": username, "media_type": normalized, "title": title},
-    )
 
 
 def get_user_usage(user_id: str) -> dict:

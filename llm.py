@@ -406,9 +406,10 @@ def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: boo
     if not quality_profile:
         return "Failed to retrieve Radarr quality profiles."
 
-    tags = [config.MEDIA_BOT_TAG]
+    raw_tags = [config.MEDIA_BOT_TAG]
     if is_kids:
-        tags.append(config.KIDS_CONTENT_TAG)
+        raw_tags.append(config.KIDS_CONTENT_TAG)
+    tags = [t for t in raw_tags if t and str(t).strip()]
 
     result, error = radarr.add_movie(
         selected_movie,
@@ -583,9 +584,10 @@ def add_sonarr_series_handler(
     if not quality_profile:
         return "Failed to retrieve Sonarr quality profiles."
 
-    tags = [config.MEDIA_BOT_TAG]
+    raw_tags = [config.MEDIA_BOT_TAG]
     if is_kids_request:
-        tags.append(config.KIDS_CONTENT_TAG)
+        raw_tags.append(config.KIDS_CONTENT_TAG)
+    tags = [t for t in raw_tags if t and str(t).strip()]
 
     result, error = sonarr.add_series(
         selected_series,
@@ -1285,13 +1287,17 @@ def chat_with_llm(
         if requested_style:
             style_name = requested_style.capitalize()
             return (
-                f"🎭 Speaking style set to **{style_name}**! "
+                f"🎭 Speaking style set to {style_name}! "
                 f"I'll respond in {style_name} style from now on. "
                 "Say \"reset style\" to return to normal."
             )
         return "✅ Speaking style reset to normal."
 
     current_style = state.get('speaking_style') if state else None
+    if current_style not in SPEAKING_STYLES:
+        current_style = None
+        if state is not None:
+            state.pop('speaking_style', None)
 
     numeric_selection_result = _resolve_pending_numeric_selection(user_message, state=state, user_info=user_info)
     if numeric_selection_result is not None:
@@ -1324,9 +1330,11 @@ def chat_with_llm(
                 "call it WITHOUT the season parameter first to see available seasons, then tell the "
                 "user which seasons are available and ask them which one they'd like.\n"
                 "- Use is_kids=true for movie/show requests that are clearly for kids or family content.\n"
-                "- Media defaults are enforced automatically: movies use released availability and HD-1080p profile; "
-                "series use standard type and HD-720p/1080p profile.\n"
-                "- Per-user daily limits are enforced: 3 movies and 1 TV series, resetting at midnight UTC.\n"
+                "- Media defaults (such as availability, quality profiles, and series type) are enforced "
+                "automatically according to server configuration; do not assume or describe them as fixed values.\n"
+                "- If per-user daily limits are enabled, they are enforced automatically according to server "
+                "configuration. You may mention that limits exist, but do not state specific numbers unless "
+                "explicitly provided in the conversation.\n"
                 "- When the user replies with a season number for a show you already looked up, "
                 "call add_sonarr_series again WITH the season parameter.\n"
                 "- When the user asks what movies or shows star a particular ACTOR or ACTRESS, "
