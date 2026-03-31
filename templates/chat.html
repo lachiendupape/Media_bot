@@ -193,6 +193,32 @@
             font-size: 13px;
             color: #9fd3a8;
         }
+        .notification-banner {
+            position: fixed;
+            top: 64px;
+            right: 16px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-width: 380px;
+        }
+        .toast {
+            background: #16213e;
+            border: 1px solid #0f3460;
+            border-radius: 10px;
+            padding: 12px 16px;
+            font-size: 14px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            box-shadow: 0 4px 12px rgba(0,0,0,.4);
+            opacity: 1;
+            transition: opacity .4s;
+            cursor: pointer;
+        }
+        .toast.success { border-left: 3px solid #4caf50; }
+        .toast.failure { border-left: 3px solid #f44336; }
+        .toast.health  { border-left: 3px solid #ff9800; }
     </style>
 </head>
 <body>
@@ -208,6 +234,7 @@
             </div>
         </div>
     </header>
+    <div class="notification-banner" id="notificationBanner"></div>
     <div class="chat-area" id="chatArea">
         <div class="msg bot">Hi {{ user.username }}! I'm your <strong>{{ plex_server_name or 'Plex' }} library assistant</strong>. Here's what I can do:
 
@@ -408,6 +435,51 @@ What can I help with?</div>
             if (e.target === bugModal) closeBugModal();
         });
         input.focus();
+
+        // --- Download notification polling ---
+        const notificationBanner = document.getElementById('notificationBanner');
+        const TOAST_AUTO_DISMISS_MS = 12000;
+        const TOAST_FADE_MS = 400;
+        const NOTIFICATION_POLL_INTERVAL_MS = 30000;
+
+        function _toastClass(eventType) {
+            if (eventType === 'downloaded') return 'success';
+            if (eventType === 'download_failed') return 'failure';
+            return 'health';
+        }
+
+        function showToast(notification) {
+            const el = document.createElement('div');
+            el.className = 'toast ' + _toastClass(notification.event_type);
+            el.textContent = notification.message;
+            el.title = 'Click to dismiss';
+            el.addEventListener('click', () => el.remove());
+            notificationBanner.appendChild(el);
+            // Auto-dismiss after TOAST_AUTO_DISMISS_MS
+            setTimeout(() => {
+                el.style.opacity = '0';
+                setTimeout(() => el.remove(), TOAST_FADE_MS);
+            }, TOAST_AUTO_DISMISS_MS);
+        }
+
+        async function pollNotifications() {
+            try {
+                const res = await fetch('/notifications');
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.notifications && data.notifications.length > 0) {
+                    for (const n of data.notifications) {
+                        showToast(n);
+                    }
+                }
+            } catch (_) {
+                // Silently ignore polling errors (e.g. network hiccup)
+            }
+        }
+
+        // Poll immediately on page load, then every NOTIFICATION_POLL_INTERVAL_MS
+        pollNotifications();
+        setInterval(pollNotifications, NOTIFICATION_POLL_INTERVAL_MS);
     </script>
 </body>
 </html>

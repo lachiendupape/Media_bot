@@ -126,6 +126,14 @@ class RadarrAPI:
             print(f"Error deleting movie from Radarr: {e}")
             return False
 
+    def get_queue(self):
+        """Gets the current download queue from Radarr, including movie details."""
+        try:
+            return self._get('/api/v3/queue', params={'page': 1, 'pageSize': 200, 'includeMovie': 'true'})
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting queue from Radarr: {e}")
+            return None
+
     def add_movie(self, movie, root_folder_path, quality_profile_id):
         """Adds a movie to Radarr. Returns (result_dict, None) on success,
         (None, error_message) on failure."""

@@ -40,6 +40,8 @@ _*.txt
 
 # SQLite cache
 credit_cache.db
+quotas.db
+notifications.db
 
 # Sensitive / non-code files
 *.csv

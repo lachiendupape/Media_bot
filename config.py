@@ -49,6 +49,11 @@ GITHUB_ISSUES_ENABLED = bool(GITHUB_ISSUES_TOKEN and GITHUB_ISSUES_REPO and "/" 
 # Owner account — only this Plex username may delete media
 OWNER_PLEX_USERNAME = os.getenv("OWNER_PLEX_USERNAME", "")
 
+# Webhook secret — optional shared secret for Radarr/Sonarr webhook authentication.
+# Configure the same value in Radarr/Sonarr under Settings > Connect > Webhook > Extra Headers
+# as: Authorization: Bearer <your_secret>
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
+
 # Download quotas
 QUOTA_ENABLED = os.getenv("QUOTA_ENABLED", "").lower() in ("1", "true", "yes")
 # 0 means unlimited; positive integers set the daily cap

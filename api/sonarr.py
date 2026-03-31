@@ -152,6 +152,17 @@ class SonarrAPI:
             print(f"Error triggering season search in Sonarr: {e}")
             return False
 
+    def get_queue(self):
+        """Gets the current download queue from Sonarr, including series and episode details."""
+        try:
+            return self._get(
+                '/api/v3/queue',
+                params={'page': 1, 'pageSize': 200, 'includeSeries': 'true', 'includeEpisode': 'true'},
+            )
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting queue from Sonarr: {e}")
+            return None
+
     def add_series(self, series, root_folder_path, quality_profile_id, season_number=None):
         """Adds a series to Sonarr. If season_number is given, only that season is monitored.
         Returns (result_dict, None) on success, (None, error_message) on failure."""
