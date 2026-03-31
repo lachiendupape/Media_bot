@@ -252,6 +252,30 @@ def _user_identity(user_info: dict | None) -> tuple[str, str]:
     return 'api_key', 'api_key'
 
 
+def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: bool, user_id: str, username: str) -> str:
+    """Performs the actual Radarr API call to add a movie, choosing the root folder based on the kids flag."""
+    if is_kids and config.RADARR_KIDS_ROOT_FOLDER:
+        root_folder_path = config.RADARR_KIDS_ROOT_FOLDER
+    else:
+        root_folder = radarr.get_root_folder()
+        if not root_folder:
+            return "Failed to retrieve Radarr root folder."
+        root_folder_path = root_folder['path']
+
+    quality_profiles = radarr.get_quality_profiles()
+    if not quality_profiles:
+        return "Failed to retrieve Radarr quality profiles."
+
+    quality_profile_id = quality_profiles[0]['id']
+    result, error = radarr.add_movie(selected_movie, root_folder_path, quality_profile_id)
+    if result:
+        quota.record_download(user_id, username, "movie", selected_movie['title'])
+        return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
+    if error == 'already_exists':
+        return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
+    return f"Failed to add movie '{selected_movie['title']}': {error}"
+
+
 def add_radarr_movie_handler(
     title: str,
     state: dict = None,
@@ -302,22 +326,18 @@ def add_radarr_movie_handler(
 
     if selected_movie is None:
         selected_movie = movies[0]
-    root_folder = radarr.get_root_folder()
-    if not root_folder:
-        return "Failed to retrieve Radarr root folder."
 
-    quality_profiles = radarr.get_quality_profiles()
-    if not quality_profiles:
-        return "Failed to retrieve Radarr quality profiles."
+    if config.RADARR_KIDS_ROOT_FOLDER and state is not None:
+        # state is required for multi-turn conversation; stateless API calls skip the prompt
+        state['pending_kids_check'] = {
+            'movie': selected_movie,
+        }
+        return (
+            f"One quick question before I add '{selected_movie['title']} ({selected_movie.get('year', '')})' — "
+            "is this a kids film or for adults? Reply with **kids** or **adults**."
+        )
 
-    quality_profile_id = quality_profiles[0]['id']
-    result, error = radarr.add_movie(selected_movie, root_folder['path'], quality_profile_id)
-    if result:
-        quota.record_download(user_id, username, "movie", selected_movie['title'])
-        return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
-    if error == 'already_exists':
-        return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
-    return f"Failed to add movie '{selected_movie['title']}': {error}"
+    return _do_add_radarr_movie(radarr, selected_movie, is_kids=False, user_id=user_id, username=username)
 
 def add_sonarr_series_handler(
     title: str,
@@ -634,6 +654,17 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
             preferred_year=picked.get('year'),
             user_info=user_info,
         )
+
+    # Pending kids/adults check for add_radarr_movie flow.
+    pending_kids = state.get('pending_kids_check')
+    if pending_kids:
+        lower = trimmed.lower()
+        if lower in ('kids', 'adults', 'adult'):
+            is_kids = lower == 'kids'
+            state.pop('pending_kids_check', None)
+            user_id, username = _user_identity(user_info)
+            return _do_add_radarr_movie(RadarrAPI(), pending_kids['movie'], is_kids=is_kids, user_id=user_id, username=username)
+        return "Please reply with **kids** or **adults** to confirm the movie category."
 
     # Pending series disambiguation for add_sonarr_series flow.
     pending_series_pick = state.get('pending_series_pick')
