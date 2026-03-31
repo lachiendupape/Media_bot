@@ -1094,8 +1094,51 @@ def _normalize_short_plural_person_name(text: str) -> str:
     return cleaned[:-1]
 
 
+def _capabilities_response() -> str:
+    """Return a stable help message covering tested chat capabilities."""
+    lines = [
+        "Here’s what I can help with right now:",
+        "",
+        "1. Add a movie by title.",
+        "2. Add a TV series and let you choose which season to grab.",
+        "3. Send kids movies and kids TV to separate library folders when that’s what you want.",
+        "4. Search your library by actor or director.",
+        "5. Tell you who starred in or directed a specific movie or show in your library.",
+        "6. Recommend movies or shows from your library that share cast or directors with something you already have.",
+        "7. Delete movies or TV series if you’re the server owner.",
+        "8. Change how I reply with commands like 'pirate mode', 'robot style', or 'reset style'.",
+        "",
+        "A few handy examples:",
+        "- Add the movie Sinners",
+        "- Add the show Adolescence",
+        "- Add Bluey for kids",
+        "- What movies do I have with Tom Hanks?",
+        "- Who directed Goodfellas?",
+        "- Who starred in Severance?",
+        "- Recommend something like Interstellar",
+        "- Delete the movie Jaws 3",
+        "- Speak like a pirate",
+        "",
+        "Everything I do stays within your Plex-connected library and services.",
+    ]
+    return "\n".join(lines)
+
+
 def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
     lowered = (user_message or '').strip()
+
+    help_patterns = [
+        re.compile(r'^help\??$', re.IGNORECASE),
+        re.compile(r'^what\s+can\s+you\s+do\??$', re.IGNORECASE),
+        re.compile(r'^what\s+do\s+you\s+do\??$', re.IGNORECASE),
+        re.compile(r'^show\s+help\??$', re.IGNORECASE),
+        re.compile(r'^(?:list|show)\s+(?:your\s+)?(?:features|capabilities|commands)\??$', re.IGNORECASE),
+    ]
+    for pattern in help_patterns:
+        if pattern.match(lowered):
+            if telemetry is not None:
+                telemetry['heuristic_route'] = 'capabilities_help'
+            return _capabilities_response()
 
     # --- Title credit lookups (who directed/starred in a specific title) ---
     director_match = re.match(r'^who\s+directed\s+(.+)$', lowered, flags=re.IGNORECASE)

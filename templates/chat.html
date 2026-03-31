@@ -221,20 +221,18 @@
         </div>
     </header>
     <div class="chat-area" id="chatArea">
-        <div class="msg bot">Hi {{ user.username }}! I'm your <strong>{{ plex_server_name or 'Plex' }} library assistant</strong>. Here's what I can do:
+        <div class="msg bot">Hi {{ user.username }}! I’m here to help with your <strong>{{ plex_server_name or 'Plex' }} library</strong>.
 
-📚 <strong>Search your library</strong> — find movies or shows starring an actor, or directed by a director
-🔍 <strong>Look up credits</strong> — ask who starred in or directed any title in your library
-➕ <strong>Add content</strong> — request a movie (via Radarr) or a TV series (via Sonarr)
-🗑️ <strong>Remove content</strong> — delete movies or TV series (owner only)
-🎭 <strong>Speaking styles</strong> — ask me to "speak like a pirate", "robot mode", "be sarcastic", "shakespearean style", or "enthusiastic mode" — say "reset style" to go back to normal
+You can ask me to find cast or directors, add movies or TV, clean up media if you’re the owner, or suggest something similar to a title you already have.
 
-Everything is scoped to <em>your Plex server only</em> — I can't browse the internet or recommend things outside your library.
+I can also switch up how I reply. Try something like "speak like a pirate" or "reset style".
 
-What can I help with?</div>
+If you want the full list, just say <strong>help</strong> or <strong>what can you do</strong>.
+
+I’m only working with your own library and connected services, not the wider internet.</div>
     </div>
     <div class="input-area">
-        <input type="text" id="msgInput" placeholder="e.g. Add the movie Sinners to Radarr..." autocomplete="off">
+        <input type="text" id="msgInput" placeholder="Try: add Sinners, who starred in Heat, or what can you do?" autocomplete="off">
         <button id="sendBtn">Send</button>
     </div>
     <div class="modal-backdrop" id="bugModal">
