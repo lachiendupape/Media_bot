@@ -17,6 +17,7 @@ import requests
 from flask import Flask, Response, g, request, jsonify, session, redirect, url_for, render_template
 from llm import chat_with_llm
 from api.radarr import credit_cache
+import notifications
 import plex_auth
 import config
 from observability import (
@@ -402,6 +403,19 @@ def chat():
             telemetry=llm_telemetry,
         )
         _save_chat_state_for_request(chat_state, api_key_state)
+
+        # Deliver any pending download notifications as a prefix to the response
+        user_id = str(user_info.get('id', '')) if user_info else ''
+        is_owner = bool(user_info.get('is_owner')) if user_info else False
+        if user_id:
+            pending = notifications.get_pending_notifications(user_id)
+            if is_owner:
+                pending += notifications.get_owner_pending_notifications()
+            if pending:
+                notifications.mark_delivered([n['id'] for n in pending])
+                notification_lines = [n['message'] for n in pending]
+                response_text = "\n".join(notification_lines) + "\n\n" + response_text
+
         session['last_request_id'] = g.request_id
         _remember_request_context(g.request_id, {
             'request_id': g.request_id,
@@ -516,9 +530,169 @@ def rebuild_cache():
     threading.Thread(target=credit_cache.build, daemon=True).start()
     return jsonify({"status": "rebuilding"})
 
+
+@app.route('/notifications', methods=['GET'])
+@require_auth
+def get_notifications():
+    """Return and mark-delivered all pending download notifications for the current user.
+
+    Used by the frontend to poll for download completion and failure events.
+    """
+    user_info = session.get('plex_user')
+    user_id = str(user_info.get('id', '')) if user_info else ''
+    is_owner = bool(user_info.get('is_owner')) if user_info else False
+
+    if not user_id:
+        return jsonify({'notifications': []}), 200
+
+    pending = notifications.get_pending_notifications(user_id)
+    if is_owner:
+        pending += notifications.get_owner_pending_notifications()
+
+    if pending:
+        notifications.mark_delivered([n['id'] for n in pending])
+
+    return jsonify({'notifications': pending})
+
+
+def _check_webhook_auth() -> bool:
+    """Return True if the request carries a valid webhook secret (or none is required).
+
+    Only ``Authorization: Bearer <secret>`` header auth is supported.
+    Query-parameter auth is intentionally omitted because secrets in URLs
+    can leak via proxy logs and referrer headers.
+    """
+    secret = config.WEBHOOK_SECRET
+    if not secret:
+        return True
+    auth_header = request.headers.get('Authorization', '')
+    return auth_header.startswith('Bearer ') and hmac.compare_digest(auth_header[7:], secret)
+
+
+def _process_download_event(title: str, media_type: str, success: bool, detail: str) -> None:
+    """Route a Radarr/Sonarr download event to the requesting user's notification queue.
+
+    Falls back to ``__owner__`` when no pending download matches the title.
+    """
+    result = notifications.find_requesting_user(title, media_type)
+    user_id = result[0] if result else '__owner__'
+    event_type = 'downloaded' if success else 'download_failed'
+    notifications.store_notification(user_id, title, media_type, event_type, detail)
+    log.info(
+        'webhook.notification_stored',
+        extra={'title': title, 'media_type': media_type, 'event_type': event_type, 'user_id': user_id},
+    )
+
+
+@app.route('/webhooks/radarr', methods=['POST'])
+def webhook_radarr():
+    """Receive Radarr event notifications (download complete, failures, health checks).
+
+    Configure in Radarr under Settings > Connect > Webhook with URL pointing here.
+    Optionally set an Authorization: Bearer <WEBHOOK_SECRET> extra header.
+    """
+    if not _check_webhook_auth():
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.get_json(silent=True) or {}
+    event_type = data.get('eventType', '')
+
+    if event_type == 'Test':
+        log.info('webhook.radarr_test')
+        return jsonify({'status': 'ok'}), 200
+
+    movie = data.get('movie') or {}
+    title = movie.get('title', 'Unknown')
+    year = movie.get('year', '')
+    display = f"{title} ({year})" if year else title
+
+    if event_type == 'Download':
+        quality = ((data.get('movieFile') or {}).get('quality') or {}).get('name', '')
+        quality_suffix = f" [{quality}]" if quality else ''
+        message = f"✅ {display} is now available in Plex!{quality_suffix}"
+        _process_download_event(title, 'movie', True, message)
+
+    elif event_type in ('DownloadFailure', 'ImportFailure'):
+        reason = data.get('message', event_type)
+        message = f"❌ There was an issue downloading {display}: {reason}"
+        _process_download_event(title, 'movie', False, message)
+
+    elif event_type == 'Health':
+        level = data.get('level', 'warning')
+        health_msg = data.get('message', 'Unknown health issue')
+        icon = '⚠️' if level.lower() == 'warning' else '❌'
+        message = f"{icon} Radarr health alert: {health_msg}"
+        notifications.store_notification('__owner__', 'Radarr', 'system', 'health', message)
+        log.warning('webhook.radarr_health', extra={'level': level, 'message': health_msg})
+
+    else:
+        log.info('webhook.radarr_unhandled_event', extra={'event_type': event_type})
+
+    return jsonify({'status': 'ok'}), 200
+
+
+@app.route('/webhooks/sonarr', methods=['POST'])
+def webhook_sonarr():
+    """Receive Sonarr event notifications (download complete, failures, health checks).
+
+    Configure in Sonarr under Settings > Connect > Webhook with URL pointing here.
+    Optionally set an Authorization: Bearer <WEBHOOK_SECRET> extra header.
+    """
+    if not _check_webhook_auth():
+        return jsonify({'error': 'Unauthorized'}), 401
+
+    data = request.get_json(silent=True) or {}
+    event_type = data.get('eventType', '')
+
+    if event_type == 'Test':
+        log.info('webhook.sonarr_test')
+        return jsonify({'status': 'ok'}), 200
+
+    series = data.get('series') or {}
+    title = series.get('title', 'Unknown')
+    episodes = data.get('episodes') or []
+
+    if event_type == 'Download':
+        # Build a compact episode reference (e.g. "S01E01" or "S01E01-E03")
+        if episodes:
+            season = episodes[0].get('seasonNumber')
+            ep_nums = sorted(e.get('episodeNumber', 0) for e in episodes)
+            if season is not None:
+                if len(ep_nums) == 1:
+                    ep_ref = f" S{season:02d}E{ep_nums[0]:02d}"
+                else:
+                    ep_ref = f" S{season:02d}E{ep_nums[0]:02d}-E{ep_nums[-1]:02d}"
+            else:
+                ep_ref = ''
+        else:
+            ep_ref = ''
+        quality = ((data.get('episodeFile') or {}).get('quality') or {}).get('name', '')
+        quality_suffix = f" [{quality}]" if quality else ''
+        message = f"✅ {title}{ep_ref} is now available in Plex!{quality_suffix}"
+        _process_download_event(title, 'tv_season', True, message)
+
+    elif event_type in ('DownloadFailure', 'ImportFailure'):
+        reason = data.get('message', event_type)
+        message = f"❌ There was an issue downloading {title}: {reason}"
+        _process_download_event(title, 'tv_season', False, message)
+
+    elif event_type == 'Health':
+        level = data.get('level', 'warning')
+        health_msg = data.get('message', 'Unknown health issue')
+        icon = '⚠️' if level.lower() == 'warning' else '❌'
+        message = f"{icon} Sonarr health alert: {health_msg}"
+        notifications.store_notification('__owner__', 'Sonarr', 'system', 'health', message)
+        log.warning('webhook.sonarr_health', extra={'level': level, 'message': health_msg})
+
+    else:
+        log.info('webhook.sonarr_unhandled_event', extra={'event_type': event_type})
+
+    return jsonify({'status': 'ok'}), 200
+
+
 if __name__ == '__main__':
     print("Starting Media Bot Flask Server...", flush=True)
     # Build actor credit cache in background
     threading.Thread(target=credit_cache.build, daemon=True).start()
-    # Listen on all local IP addresses on port 5000 
+    # Listen on all local IP addresses on port 5000
     app.run(host='0.0.0.0', port=5000, debug=False)

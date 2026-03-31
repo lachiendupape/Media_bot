@@ -7,6 +7,7 @@ from openai import OpenAI
 from api.radarr import RadarrAPI, credit_cache
 from api.sonarr import SonarrAPI
 import config
+import notifications
 import quota
 from observability import redact_sensitive_fields, start_span
 
@@ -210,6 +211,23 @@ tools = [
                     }
                 },
                 "required": ["title"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_download_status",
+            "description": (
+                "Checks the current download queue in Radarr and Sonarr to show the status of "
+                "in-progress downloads, including percentage complete, estimated time remaining, "
+                "and any errors or warnings. Use when the user asks about download progress, "
+                "whether something is ready, or if there are download issues."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         }
     },
@@ -635,6 +653,98 @@ def add_sonarr_series_handler(
         return f"'{selected_series['title']} ({selected_series.get('year', '')})' is already in your library — no need to add it again!"
     return f"Failed to add TV series '{selected_series['title']}': {error}"
 
+def check_download_status_handler() -> str:
+    """Query the Radarr and Sonarr download queues and return a formatted status summary."""
+    radarr = RadarrAPI()
+    sonarr = SonarrAPI()
+
+    lines = []
+
+    # --- Movies (Radarr) ---
+    try:
+        movie_queue = radarr.get_queue()
+    except Exception as e:
+        movie_queue = None
+        lines.append(f"⚠️ Could not reach Radarr: {e}")
+
+    if movie_queue is None:
+        # Treat a None queue as an error condition rather than as an empty queue.
+        # If no specific Radarr warning has been added yet, add a generic one.
+        if not any("Radarr" in line for line in lines):
+            lines.append("⚠️ Could not reach Radarr (queue unavailable)")
+        movie_records = []
+    else:
+        movie_records = movie_queue.get('records', [])
+    for item in movie_records:
+        movie = item.get('movie') or {}
+        title = movie.get('title') or item.get('title', 'Unknown')
+        year = movie.get('year', '')
+        label = f"{title} ({year})" if year else title
+
+        size = item.get('size', 0)
+        sizeleft = item.get('sizeleft', 0)
+        progress = round((size - sizeleft) / size * 100) if size > 0 and size >= sizeleft else None
+        timeleft = item.get('timeleft', '')
+        status = item.get('status', 'unknown')
+        tracked = item.get('trackedDownloadStatus', 'ok')
+        status_msgs = [sm.get('title', '') for sm in item.get('statusMessages', []) if sm.get('title')]
+
+        if tracked in ('warning', 'error'):
+            icon = '⚠️' if tracked == 'warning' else '❌'
+            detail = ', '.join(status_msgs) if status_msgs else tracked
+            lines.append(f"  {icon} 🎬 {label} — {detail}")
+        elif status in ('completed', 'importPending', 'importing', 'imported'):
+            lines.append(f"  ✅ 🎬 {label} — ready to import")
+        elif timeleft and progress is not None and progress < 100:
+            lines.append(f"  ⏬ 🎬 {label} — {progress}% (~{timeleft} remaining)")
+        else:
+            lines.append(f"  ⏬ 🎬 {label} — {status}")
+
+    # --- TV Series (Sonarr) ---
+    try:
+        tv_queue = sonarr.get_queue()
+    except Exception as e:
+        tv_queue = None
+        lines.append(f"⚠️ Could not reach Sonarr: {e}")
+
+    if tv_queue is None:
+        tv_records = []
+    else:
+        tv_records = tv_queue.get('records', [])
+
+    for item in tv_records:
+        series = item.get('series') or {}
+        episode = item.get('episode') or {}
+        title = series.get('title', 'Unknown')
+        season = episode.get('seasonNumber')
+        ep_num = episode.get('episodeNumber')
+        ep_info = f" S{season:02d}E{ep_num:02d}" if season is not None and ep_num is not None else ""
+
+        size = item.get('size', 0)
+        sizeleft = item.get('sizeleft', 0)
+        progress = round((size - sizeleft) / size * 100) if size > 0 and size >= sizeleft else None
+        timeleft = item.get('timeleft', '')
+        status = item.get('status', 'unknown')
+        tracked = item.get('trackedDownloadStatus', 'ok')
+        status_msgs = [sm.get('title', '') for sm in item.get('statusMessages', []) if sm.get('title')]
+
+        if tracked in ('warning', 'error'):
+            icon = '⚠️' if tracked == 'warning' else '❌'
+            detail = ', '.join(status_msgs) if status_msgs else tracked
+            lines.append(f"  {icon} 📺 {title}{ep_info} — {detail}")
+        elif status in ('completed', 'importPending', 'importing', 'imported'):
+            lines.append(f"  ✅ 📺 {title}{ep_info} — ready to import")
+        elif timeleft and progress is not None and progress < 100:
+            lines.append(f"  ⏬ 📺 {title}{ep_info} — {progress}% (~{timeleft} remaining)")
+        else:
+            lines.append(f"  ⏬ 📺 {title}{ep_info} — {status}")
+
+    if not lines:
+        return "✅ No active downloads — your queue is empty."
+
+    return "📥 Current downloads:\n\n" + "\n".join(lines)
+
+
 def _format_person_results(results: list, display_name: str) -> str:
     """Format a flat list of person credit results under a single display name."""
     lines = [f"Results for '{display_name}' ({len(results)} title{'s' if len(results) != 1 else ''}):"]
@@ -649,6 +759,7 @@ def _format_person_results(results: list, display_name: str) -> str:
         credit_part = f" {credit_info}" if credit_info else ""
         lines.append(f"{base}{credit_part} [{status}]")
     return "\n".join(lines)
+
 
 
 def search_by_person_handler(person_name: str, media_type: str = None, role: str = None, state: dict = None) -> str:
@@ -1370,8 +1481,8 @@ def chat_with_llm(
             "content": (
                 "You are a media library assistant. You can add movies (via Radarr), add TV series "
                 "(via Sonarr), search the library by actor/actress or director name, look up who "
-                "starred in or directed a given movie/TV title, and delete movies or TV series "
-                "(owner only).\n"
+                "starred in or directed a given movie/TV title, delete movies or TV series "
+                "(owner only), and check download progress.\n"
                 "RULES:\n"
                 "- When the user asks to ADD a MOVIE, call add_radarr_movie.\n"
                 "- When the user asks to ADD a TV SERIES or TV SHOW, call add_sonarr_series. "
@@ -1410,6 +1521,8 @@ def chat_with_llm(
                 "- When the user asks for movies or shows SIMILAR TO, LIKE, or RECOMMENDATIONS based on "
                 "a specific title, IMMEDIATELY call recommend_similar with the reference title. "
                 "Set media_type='movie' for movie-only requests, 'tv' for TV-only, or omit for both.\n"
+                "- When the user asks about DOWNLOAD STATUS, PROGRESS, whether something is READY, "
+                "IS IT DONE, or if there are download ISSUES or ERRORS, call check_download_status.\n"
                 "- For general questions, respond directly without calling any tools.\n"
                 "- Be concise."
                 + style_suffix
@@ -1514,6 +1627,8 @@ def chat_with_llm(
                             media_type=arguments.get("media_type"),
                             state=state,
                         )
+                    elif function_name == "check_download_status":
+                        result = check_download_status_handler()
                     else:
                         result = f"Unknown function: {function_name}"
 
