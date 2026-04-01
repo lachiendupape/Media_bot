@@ -65,6 +65,11 @@ SONARR_KIDS_TV_ROOT = os.getenv("SONARR_KIDS_TV_ROOT", "/kidstv")
 SONARR_DEFAULT_QUALITY_PROFILE = os.getenv("SONARR_DEFAULT_QUALITY_PROFILE", "HD - 720p/1080p")
 SONARR_SERIES_TYPE = os.getenv("SONARR_SERIES_TYPE", "standard")
 
+# Kids/adults auto-classification
+AUTO_CLASSIFY_KIDS_ENABLED = os.getenv("AUTO_CLASSIFY_KIDS_ENABLED", "true").lower() in ("1", "true", "yes")
+OMDB_API_KEY = os.getenv("OMDB_API_KEY", "")
+OMDB_TIMEOUT_SECONDS = int(os.getenv("OMDB_TIMEOUT_SECONDS", "5"))
+
 # Download quotas
 QUOTA_ENABLED = os.getenv("QUOTA_ENABLED", "").lower() in ("1", "true", "yes")
 # 0 means unlimited; positive integers set the daily cap

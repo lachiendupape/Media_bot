@@ -12,7 +12,7 @@ A natural-language media library assistant that lets you search and manage your 
 - **Recommendations** -- ask for movies or shows similar to a title in your library; the bot finds titles sharing cast or directors.
 - **Delete media (owner only)** -- the Plex server owner can remove movies or TV series (with file deletion) through the chat.
 - **Default media request profiles** -- applies configured Radarr/Sonarr roots, quality profiles, tags, and minimum availability automatically.
-- **Kids routing** -- routes kids movies and shows into dedicated root folders, with optional prompt-based confirmation for movies.
+- **Kids routing** -- routes kids movies and shows into dedicated root folders, with auto-classification from metadata and prompt-based confirmation when ambiguous.
 - **Download quotas** -- optional per-user daily download limits for movies and TV series, with per-user overrides and UTC midnight reset.
 - **Disk space guard** -- blocks new downloads when any disk drops below 5% free space.
 - **User bug reports** -- the chat UI can send issue reports with request IDs and optional debug context.
@@ -116,6 +116,9 @@ Useful optional defaults for automated media adds:
 | `SONARR_KIDS_TV_ROOT` | Sonarr root folder for kids TV |
 | `SONARR_DEFAULT_QUALITY_PROFILE` | Default Sonarr quality profile name |
 | `SONARR_SERIES_TYPE` | Default Sonarr series type (for example `standard`) |
+| `AUTO_CLASSIFY_KIDS_ENABLED` | Enable automatic kids/adults classification from metadata before prompting |
+| `OMDB_API_KEY` | Optional OMDb API key for better kids/adults classification (especially TV) |
+| `OMDB_TIMEOUT_SECONDS` | Timeout for OMDb lookups in seconds |
 
 Generate a secret key:
 
