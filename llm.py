@@ -3,6 +3,7 @@ import logging
 import re
 import threading
 import time
+import requests
 from openai import OpenAI
 from api.radarr import RadarrAPI, credit_cache
 from api.sonarr import SonarrAPI
@@ -305,13 +306,162 @@ _KIDS_HINT_PATTERN = re.compile(
     r"\b(kids?|children|child|family|disney|pixar|animated|cartoon|young\s+kids?)\b",
     flags=re.IGNORECASE,
 )
+_ADULT_HINT_PATTERN = re.compile(
+    r"\b(adults?|grown\s*ups?|mature|18\+|not\s+for\s+kids|for\s+adults?)\b",
+    flags=re.IGNORECASE,
+)
+
+_KIDS_CERTIFICATIONS = {
+    "G",
+    "TVY",
+    "TVY7",
+    "TVG",
+    "U",
+    "PG",
+    "TVPG",
+}
+_ADULT_CERTIFICATIONS = {
+    "R",
+    "NC17",
+    "TV14",
+    "TVMA",
+    "MA15+",
+    "R18+",
+    "X",
+}
+
+_OMDB_SESSION = requests.Session()
+_OMDB_CACHE: dict[tuple[str, str, str], bool | None] = {}
+_OMDB_CACHE_LOCK = threading.Lock()
+
+
+def _initial_kids_preference(title: str, is_kids: bool | None = None) -> bool | None:
+    """Return an explicit/heuristic preference from user input only."""
+    if is_kids is not None:
+        return bool(is_kids)
+    text = title or ""
+    if _KIDS_HINT_PATTERN.search(text):
+        return True
+    if _ADULT_HINT_PATTERN.search(text):
+        return False
+    return None
+
+
+def _normalize_certification(value: str) -> str:
+    cert = (value or "").upper().strip()
+    cert = cert.replace("US:", "").replace("TV-", "TV").replace(" ", "")
+    cert = cert.replace("_", "")
+    return cert
+
+
+def _extract_certification_from_item(item: dict) -> str:
+    if not item:
+        return ""
+    for key in ("certification", "contentRating", "rating", "rated", "mpaaRating"):
+        val = item.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    ratings = item.get("ratings") or item.get("certifications")
+    if isinstance(ratings, list):
+        for rating in ratings:
+            if isinstance(rating, dict):
+                for key in ("value", "rating", "name", "certification"):
+                    val = rating.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val
+    return ""
+
+
+def _is_family_animation(item: dict) -> bool:
+    genres = item.get("genres") or []
+    normalized = set()
+    for g in genres:
+        if isinstance(g, str):
+            normalized.add(g.strip().lower())
+        elif isinstance(g, dict):
+            name = g.get("name")
+            if isinstance(name, str):
+                normalized.add(name.strip().lower())
+    return bool(
+        normalized.intersection({"family", "children", "animation", "kids", "cartoon"})
+    )
+
+
+def _classify_from_metadata(item: dict) -> bool | None:
+    cert = _normalize_certification(_extract_certification_from_item(item))
+    if cert:
+        if cert in _KIDS_CERTIFICATIONS:
+            return True
+        if cert in _ADULT_CERTIFICATIONS:
+            return False
+    if _is_family_animation(item):
+        return True
+    return None
+
+
+def _classify_from_omdb(title: str, year: int | None, media_type: str) -> bool | None:
+    """Best-effort OMDb classification; returns None when unavailable/ambiguous."""
+    api_key = (config.OMDB_API_KEY or "").strip()
+    if not config.AUTO_CLASSIFY_KIDS_ENABLED or not api_key or not title:
+        return None
+
+    lookup_type = "series" if media_type == "series" else "movie"
+    cache_key = (title.strip().lower(), str(year or ""), lookup_type)
+    with _OMDB_CACHE_LOCK:
+        if cache_key in _OMDB_CACHE:
+            return _OMDB_CACHE[cache_key]
+
+    params = {
+        "apikey": api_key,
+        "t": title,
+        "type": lookup_type,
+    }
+    if year:
+        params["y"] = str(year)
+
+    result: bool | None = None
+    try:
+        response = _OMDB_SESSION.get("https://www.omdbapi.com/", params=params, timeout=config.OMDB_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        payload = response.json()
+        if str(payload.get("Response", "")).lower() == "true":
+            cert = _normalize_certification(payload.get("Rated", ""))
+            if cert in _KIDS_CERTIFICATIONS:
+                result = True
+            elif cert in _ADULT_CERTIFICATIONS:
+                result = False
+            elif _is_family_animation({"genres": (payload.get("Genre") or "").split(",")}):
+                result = True
+    except Exception:
+        # Best-effort only: keep behavior stable when OMDb is unavailable.
+        result = None
+
+    with _OMDB_CACHE_LOCK:
+        _OMDB_CACHE[cache_key] = result
+    return result
+
+
+def _resolve_kids_classification(
+    title: str,
+    user_preference: bool | None,
+    item: dict,
+    media_type: str,
+) -> bool | None:
+    """Resolve kids routing from explicit preference -> metadata -> OMDb."""
+    if user_preference is not None:
+        return user_preference
+
+    meta_decision = _classify_from_metadata(item)
+    if meta_decision is not None:
+        return meta_decision
+
+    return _classify_from_omdb(title, item.get("year"), media_type)
 
 
 def _looks_like_kids_request(title: str, is_kids: bool | None = None) -> bool:
     """Infer kids routing when caller did not explicitly provide *is_kids*."""
-    if is_kids is not None:
-        return bool(is_kids)
-    return bool(_KIDS_HINT_PATTERN.search(title or ""))
+    initial = _initial_kids_preference(title, is_kids)
+    return bool(initial) if initial is not None else False
 
 def _detect_style_command(message: str) -> tuple[str | None, bool]:
     """Detect if *message* is a speaking-style change command.
@@ -473,7 +623,7 @@ def add_radarr_movie_handler(
     if not allowed:
         return quota_msg
 
-    is_kids_request = _looks_like_kids_request(title, is_kids)
+    initial_kids_preference = _initial_kids_preference(title, is_kids)
     radarr = RadarrAPI()
     movies = radarr.lookup_movie(title)
     if not movies:
@@ -491,7 +641,7 @@ def add_radarr_movie_handler(
             state.pop('pending_series_pick', None)
             state['pending_movie_add'] = {
                 'query': title,
-                'is_kids': is_kids_request,
+                'is_kids': initial_kids_preference,
                 'options': [
                     {
                         'title': m.get('title', '?'),
@@ -509,17 +659,29 @@ def add_radarr_movie_handler(
 
     if selected_movie is None:
         selected_movie = movies[0]
-    if is_kids is None and config.RADARR_KIDS_MOVIE_ROOT and state is not None:
+
+    resolved_kids = _resolve_kids_classification(
+        title=selected_movie.get('title', title),
+        user_preference=initial_kids_preference,
+        item=selected_movie,
+        media_type='movie',
+    )
+
+    if resolved_kids is None and config.RADARR_KIDS_MOVIE_ROOT and state is not None:
         # state is required for multi-turn conversation; stateless API calls skip the prompt
         state['pending_kids_check'] = {
-            'movie': selected_movie,
+            'kind': 'movie',
+            'query': title,
+            'tmdbId': selected_movie.get('tmdbId'),
+            'year': selected_movie.get('year'),
         }
         return (
             f"One quick question before I add '{selected_movie['title']} ({selected_movie.get('year', '')})' — "
             "is this a kids film or for adults? Reply with **kids** or **adults**."
         )
 
-    return _do_add_radarr_movie(radarr, selected_movie, is_kids=is_kids_request, user_id=user_id, username=username)
+    final_kids = bool(resolved_kids) if resolved_kids is not None else False
+    return _do_add_radarr_movie(radarr, selected_movie, is_kids=final_kids, user_id=user_id, username=username)
 
 def add_sonarr_series_handler(
     title: str,
@@ -539,7 +701,7 @@ def add_sonarr_series_handler(
     if not allowed:
         return quota_msg
 
-    is_kids_request = _looks_like_kids_request(title, is_kids)
+    initial_kids_preference = _initial_kids_preference(title, is_kids)
     sonarr = SonarrAPI()
     series = sonarr.lookup_series(title)
     if not series:
@@ -557,7 +719,7 @@ def add_sonarr_series_handler(
             state.pop('pending_movie_add', None)
             state['pending_series_pick'] = {
                 'query': title,
-                'is_kids': is_kids_request,
+                'is_kids': initial_kids_preference,
                 'options': [
                     {
                         'title': s.get('title', '?'),
@@ -575,6 +737,28 @@ def add_sonarr_series_handler(
 
     if selected_series is None:
         selected_series = series[0]
+
+    resolved_kids = _resolve_kids_classification(
+        title=selected_series.get('title', title),
+        user_preference=initial_kids_preference,
+        item=selected_series,
+        media_type='series',
+    )
+
+    if resolved_kids is None and config.SONARR_KIDS_TV_ROOT and state is not None:
+        state['pending_kids_check'] = {
+            'kind': 'series',
+            'query': title,
+            'tvdbId': selected_series.get('tvdbId'),
+            'year': selected_series.get('year'),
+            'season': season,
+        }
+        return (
+            f"One quick question before I add '{selected_series['title']} ({selected_series.get('year', '')})' — "
+            "should this go to **kids TV** or **adults TV**? Reply with **kids** or **adults**."
+        )
+
+    is_kids_request = bool(resolved_kids) if resolved_kids is not None else False
 
     seasons = [s for s in selected_series.get('seasons', []) if s['seasonNumber'] > 0]
 
@@ -962,8 +1146,26 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
         if lower in ('kids', 'adults', 'adult'):
             is_kids = lower == 'kids'
             state.pop('pending_kids_check', None)
-            user_id, username = _user_identity(user_info)
-            return _do_add_radarr_movie(RadarrAPI(), pending_kids['movie'], is_kids=is_kids, user_id=user_id, username=username)
+            if pending_kids.get('kind') == 'series':
+                return add_sonarr_series_handler(
+                    pending_kids.get('query', ''),
+                    season=pending_kids.get('season'),
+                    state=state,
+                    preferred_tvdb_id=pending_kids.get('tvdbId'),
+                    preferred_year=pending_kids.get('year'),
+                    user_info=user_info,
+                    is_kids=is_kids,
+                )
+            return add_radarr_movie_handler(
+                pending_kids.get('query', ''),
+                state=state,
+                preferred_tmdb_id=pending_kids.get('tmdbId'),
+                preferred_year=pending_kids.get('year'),
+                user_info=user_info,
+                is_kids=is_kids,
+            )
+        if pending_kids.get('kind') == 'series':
+            return "Please reply with **kids** or **adults** to confirm if this show should go to kids TV or adults TV."
         return "Please reply with **kids** or **adults** to confirm the movie category."
 
     # Pending series disambiguation for add_sonarr_series flow.
