@@ -1127,7 +1127,11 @@ def _format_title_credits_results(results, title: str = None, role: str = None, 
 
 
 def _extract_number_from_message(text: str) -> int | None:
-    """Extract a leading integer from a user message, ignoring trailing words like 'please'."""
+    """Extract a leading integer from a user message, ignoring trailing words like 'please'.
+
+    The word-boundary assertion ensures strings like '1abc' do not match; only digits
+    followed by whitespace, punctuation, or end-of-string are accepted.
+    """
     m = re.match(r'^(\d+)\b', text.strip())
     return int(m.group(1)) if m else None
 
