@@ -1,0 +1,32 @@
+name: Deploy Dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch or tag to deploy to dev (example: master or v1.4.2)"
+        required: true
+        default: "master"
+        type: string
+
+jobs:
+  deploy-dev:
+    name: Deploy to development environment
+    runs-on: self-hosted
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Deploy dev stack
+        shell: pwsh
+        run: |
+          ./scripts/deploy-dev.ps1 -Ref "${{ github.event.inputs.ref }}"
+
+      - name: Smoke test /health (dev)
+        shell: pwsh
+        run: |
+          $resp = Invoke-WebRequest -Uri "http://127.0.0.1:5001/health" -UseBasicParsing -TimeoutSec 15
+          Write-Host $resp.Content

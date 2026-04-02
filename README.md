@@ -225,10 +225,9 @@ curl -X POST http://localhost:5000/chat \
 Typical workflow:
 
 1. Develop and test locally with `docker-compose.dev.yml`.
-2. Merge to `master` when ready.
-3. Create and push a version tag (for example `v1.3.0`).
-4. GitHub Actions builds and publishes `ghcr.io/lachiendupape/media-bot:v1.3.0`.
-5. Deploy from git ref/tag on host with the deploy script.
+2. Publish a versioned image with the `Release` workflow (for example `v1.3.0`).
+3. Deploy and validate in dev first (`Deploy Dev` workflow or `scripts/deploy-dev.ps1`).
+4. Manually promote to prod (`Promote To Prod` workflow) after dev checks pass.
 
 Release tagging example:
 
@@ -243,10 +242,23 @@ Deploy example:
 ./scripts/deploy-prod.ps1 -Ref v1.3.0
 ```
 
+Dev deploy example:
+
+```powershell
+./scripts/deploy-dev.ps1 -Ref v1.3.0
+```
+
 The deploy script maps version tags like `v1.3.0` to the matching GHCR image tag.
 For branch refs such as `main` or `master`, it deploys `latest`.
 If the GHCR pull is denied or unavailable on the host, the script automatically
 falls back to a local Docker build using the same target image tag.
+
+Promotion checklist before prod:
+
+1. `Deploy Dev` workflow succeeds for target ref/version.
+2. Dev `/health` endpoint returns `running`.
+3. Basic `/chat` smoke tests pass (including follow-up parsing like `1 please` and `season 1 please`).
+4. Run `Promote To Prod` workflow with the tested version.
 
 ## Project Structure
 
@@ -269,6 +281,7 @@ Media_bot/
     sonarr.py        -- Sonarr API wrapper
     lidarr.py        -- Lidarr API wrapper (status check only)
   scripts/
+    deploy-dev.ps1   -- Deploy dev stack from a git ref/tag
     deploy-prod.ps1  -- Deploy stack from a git ref/tag (GitOps-style)
     security/
       run-baseline.ps1   -- Local baseline scanner (ZAP + Nuclei)
@@ -281,6 +294,8 @@ Media_bot/
   .github/
     workflows/
       ci.yml         -- GitHub Actions lint and syntax check
+      deploy-dev.yml -- GitHub Actions dev deployment and health validation
+      promote-to-prod.yml -- GitHub Actions manual dev-first promotion to production
       release.yml    -- GitHub Actions Docker image publish on version tags
       security.yml   -- GitHub Actions scheduled/manual security scans
   requirements.txt   -- Python dependencies
