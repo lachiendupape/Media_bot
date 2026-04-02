@@ -80,6 +80,15 @@ DAILY_TV_SERIES_QUOTA = int(os.getenv("DAILY_TV_SERIES_QUOTA", os.getenv("DAILY_
 # Webhook auth — optional shared secret for Radarr/Sonarr webhook endpoints
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 
+# Conversation memory (Phase 1 rollout)
+CONVERSATION_MEMORY_ENABLED = os.getenv("CONVERSATION_MEMORY_ENABLED", "false").lower() in ("1", "true", "yes")
+# Maximum number of turns (user + assistant pairs) to retain per identity
+CONVERSATION_MEMORY_MAX_TURNS = int(os.getenv("CONVERSATION_MEMORY_MAX_TURNS", "20"))
+# TTL in hours; 0 disables TTL expiration (only size-based trimming)
+CONVERSATION_MEMORY_TTL_HOURS = int(os.getenv("CONVERSATION_MEMORY_TTL_HOURS", "24"))
+# Run TTL cleanup on every Nth request (0 disables opportunistic cleanup)
+CONVERSATION_MEMORY_CLEANUP_INTERVAL = int(os.getenv("CONVERSATION_MEMORY_CLEANUP_INTERVAL", "100"))
+
 # Flask
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 if not FLASK_SECRET_KEY or len(FLASK_SECRET_KEY) < 16:
