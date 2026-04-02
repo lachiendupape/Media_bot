@@ -23,7 +23,11 @@ Write-Host "Deploying Media Bot from git ref: $Ref"
 
 Invoke-CheckedCommand -Command { git fetch --all --tags } -FailureMessage "git fetch failed"
 Invoke-CheckedCommand -Command { git checkout $Ref } -FailureMessage "git checkout failed for ref '$Ref'"
-Invoke-CheckedCommand -Command { git pull --ff-only } -FailureMessage "git pull failed"
+# Only pull when checked out on a branch; tags leave HEAD detached
+$null = git symbolic-ref --quiet HEAD 2>$null
+if ($LASTEXITCODE -eq 0) {
+    Invoke-CheckedCommand -Command { git pull --ff-only } -FailureMessage "git pull failed"
+}
 
 $imageTag = if ($Ref -match '^v\d') { $Ref } else { "latest" }
 $env:MEDIA_BOT_VERSION = $imageTag
