@@ -1537,6 +1537,22 @@ def _capabilities_response() -> str:
     return "\n".join(lines)
 
 
+def _sanitize_direct_response_text(text: str) -> tuple[str, bool]:
+    """Remove accidental JSON code blocks from user-facing direct responses."""
+    if not isinstance(text, str):
+        return "", False
+
+    original = text
+    # Strip fenced JSON blocks that sometimes leak from model reasoning/tool-like output.
+    sanitized = re.sub(r"```json\s*.*?```", "", original, flags=re.IGNORECASE | re.DOTALL)
+    # If the model used generic fences for JSON-like output, remove those too.
+    sanitized = re.sub(r"```\s*\{\s*\"status\".*?```", "", sanitized, flags=re.IGNORECASE | re.DOTALL)
+    # Normalize blank lines after block removal.
+    sanitized = re.sub(r"\n{3,}", "\n\n", sanitized).strip()
+
+    return sanitized or original, sanitized != original
+
+
 def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
     lowered = (user_message or '').strip()
 
@@ -1955,7 +1971,9 @@ def chat_with_llm(
             return final_result
         else:
             telemetry['direct_response'] = True
-            return response_message.content
+            safe_response, changed = _sanitize_direct_response_text(response_message.content)
+            telemetry['direct_response_sanitized'] = changed
+            return safe_response
 
     except Exception:
         log.exception("Error in chat_with_llm", extra={'request_id': request_id})
