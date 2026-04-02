@@ -292,6 +292,18 @@ _STYLE_RESET_PATTERNS = [
     re.compile(rf"\bstop\s+being\s+(?:so\s+)?(?:{_STYLE_KEYWORD_PATTERN})\b"),
     re.compile(r"\breturn\s+to\s+normal\b"),
     re.compile(r"\bno\s+more\s+styles?\b"),
+    # "stop talking/speaking in/like a robot voice" — specific speech verbs to avoid false positives;
+    # preposition (in/like) and article are each independently optional to handle all phrasings
+    re.compile(
+        rf"\bstop\s+(?:talk(?:ing)?|speak(?:ing)?|respond(?:ing)?|reply(?:ing)?|act(?:ing)?|communicat(?:e|ing)|sound(?:ing)?|us(?:e|ing)|writ(?:e|ing)|chat(?:ting)?)"
+        rf"\s+(?:(?:in|like)\s+)?(?:a\s+|the\s+|that\s+)?(?:{_STYLE_KEYWORD_PATTERN})\b"
+    ),
+    # "don't/don't talk/speak like a robot" — negation + specific speech verb + preposition + style keyword;
+    # accepts both ASCII apostrophe and curly apostrophe (U+2019) for mobile/autocorrect compatibility
+    re.compile(
+        rf"\b(?:don[\u2019']?t|do\s+not)\s+(?:talk|speak|respond|reply|act|communicate|sound|use|write|chat)"
+        rf"\s+(?:in|like)\s+(?:a\s+)?(?:{_STYLE_KEYWORD_PATTERN})\b"
+    ),
 ]
 _STYLE_SET_PATTERNS = [
     re.compile(r"\b(?:speak|talk|respond|reply|write|chat|act)\s+(?:like|as)\s+(?:a\s+)?(\w+)"),
