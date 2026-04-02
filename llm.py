@@ -293,14 +293,15 @@ _STYLE_RESET_PATTERNS = [
     re.compile(r"\breturn\s+to\s+normal\b"),
     re.compile(r"\bno\s+more\s+styles?\b"),
     # "stop talking/speaking in/like a robot voice" — specific speech verbs to avoid false positives;
-    # the preposition (in/like + article) is optional to also handle "stop using robot voice"
+    # preposition (in/like) and article are each independently optional to handle all phrasings
     re.compile(
-        rf"\bstop\s+(?:talk(?:ing)?|speak(?:ing)?|respond(?:ing)?|reply(?:ing)?|act(?:ing)?|communicat(?:e|ing)|sound(?:ing)?|us(?:e|ing))"
-        rf"\s+(?:(?:in|like)\s+(?:a\s+|the\s+|that\s+)?)?(?:{_STYLE_KEYWORD_PATTERN})\b"
+        rf"\bstop\s+(?:talk(?:ing)?|speak(?:ing)?|respond(?:ing)?|reply(?:ing)?|act(?:ing)?|communicat(?:e|ing)|sound(?:ing)?|us(?:e|ing)|writ(?:e|ing)|chat(?:ting)?)"
+        rf"\s+(?:(?:in|like)\s+)?(?:a\s+|the\s+|that\s+)?(?:{_STYLE_KEYWORD_PATTERN})\b"
     ),
-    # "don't talk/speak like a robot" — negation + specific speech verb + preposition + style keyword
+    # "don't/don't talk/speak like a robot" — negation + specific speech verb + preposition + style keyword;
+    # accepts both ASCII apostrophe and curly apostrophe (U+2019) for mobile/autocorrect compatibility
     re.compile(
-        rf"\b(?:don'?t|do\s+not)\s+(?:talk|speak|respond|reply|act|communicate|sound|use)"
+        rf"\b(?:don[\u2019']?t|do\s+not)\s+(?:talk|speak|respond|reply|act|communicate|sound|use|write|chat)"
         rf"\s+(?:in|like)\s+(?:a\s+)?(?:{_STYLE_KEYWORD_PATTERN})\b"
     ),
 ]
