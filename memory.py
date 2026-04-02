@@ -96,20 +96,19 @@ def save_turn(identity: str, role: str, content: str) -> None:
             conn.close()
 
 
-def load_prior_turns(
-    identity: str, max_turns: int = 20, include_current: bool = False
-) -> list[dict]:
+def load_prior_turns(identity: str, max_turns: int = 20) -> list[dict]:
     """Load conversation history for a given identity.
 
     Args:
         identity: Unique identifier for the user/session
-        max_turns: Maximum number of turns to retrieve (most recent first)
-        include_current: If False, exclude the most recent user turn (typically
-                        the current request being processed)
+        max_turns: Maximum number of stored turns to retrieve
 
     Returns:
         List of dicts with keys: id, identity, role, content, created_at
     """
+    if max_turns <= 0:
+        return []
+
     with _lock:
         conn = _get_connection()
         try:
@@ -118,20 +117,14 @@ def load_prior_turns(
                 SELECT id, identity, role, content, created_at
                 FROM conversation_turns
                 WHERE identity = ?
-                ORDER BY created_at DESC
+                ORDER BY created_at DESC, id DESC
                 LIMIT ?
                 """,
-                (identity, max_turns + (0 if include_current else 1)),
+                (identity, max_turns),
             ).fetchall()
 
             # Reverse to get chronological order (oldest first)
-            turns = [dict(row) for row in reversed(rows)]
-
-            # Skip the most recent turn if not including current
-            if not include_current and turns:
-                turns = turns[:-1]
-
-            return turns
+            return [dict(row) for row in reversed(rows)]
         finally:
             conn.close()
 
@@ -145,27 +138,30 @@ def trim_to_n(identity: str, max_turns: int = 20) -> None:
         identity: Unique identifier for the user/session
         max_turns: Maximum number of turns to retain
     """
+    if max_turns <= 0:
+        delete_identity_all(identity)
+        return
+
     with _lock:
         conn = _get_connection()
         try:
-            # Get the ID of the Nth most recent turn
-            result = conn.execute(
+            conn.execute(
                 """
-                SELECT id FROM conversation_turns
+                DELETE FROM conversation_turns
                 WHERE identity = ?
-                ORDER BY created_at DESC
-                LIMIT 1 OFFSET ?
+                  AND id NOT IN (
+                    SELECT id FROM (
+                        SELECT id
+                        FROM conversation_turns
+                        WHERE identity = ?
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT ?
+                    )
+                  )
                 """,
-                (identity, max_turns),
-            ).fetchone()
-
-            if result:
-                cutoff_id = result["id"]
-                conn.execute(
-                    "DELETE FROM conversation_turns WHERE identity = ? AND id < ?",
-                    (identity, cutoff_id),
-                )
-                conn.commit()
+                (identity, identity, max_turns),
+            )
+            conn.commit()
         finally:
             conn.close()
 

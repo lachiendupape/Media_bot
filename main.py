@@ -421,10 +421,7 @@ def chat():
             prior_turns = memory.load_prior_turns(
                 identity=memory_identity,
                 max_turns=config.CONVERSATION_MEMORY_MAX_TURNS,
-                include_current=False
             )
-            # Trim memory to max turns to enforce size limit
-            memory.trim_to_n(memory_identity, config.CONVERSATION_MEMORY_MAX_TURNS)
         
         response_text = chat_with_llm(
             user_message,
@@ -440,6 +437,7 @@ def chat():
         if config.CONVERSATION_MEMORY_ENABLED and memory_identity:
             memory.save_turn(memory_identity, "user", user_message)
             memory.save_turn(memory_identity, "assistant", response_text)
+            memory.trim_to_n(memory_identity, config.CONVERSATION_MEMORY_MAX_TURNS)
 
         # Deliver any pending download notifications as a prefix to the response
         user_id = str(user_info.get('id', '')) if user_info else ''

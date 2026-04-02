@@ -1691,6 +1691,31 @@ def chat_with_llm(
     if not client:
         return "AI Client is not initialized."
 
+    def _prepare_prior_turn_messages(turns: list | None) -> list[dict]:
+        if not turns:
+            return []
+
+        prepared_turns = []
+        for turn in turns:
+            if not isinstance(turn, dict):
+                continue
+
+            role = turn.get("role")
+            content = turn.get("content")
+            if role not in {"user", "assistant"}:
+                continue
+            if not isinstance(content, str) or not content.strip():
+                continue
+
+            prepared_turns.append({"role": role, "content": content})
+
+        if config.CONVERSATION_MEMORY_MAX_TURNS > 0:
+            prepared_turns = prepared_turns[-config.CONVERSATION_MEMORY_MAX_TURNS :]
+
+        return prepared_turns
+
+    prepared_prior_turns = _prepare_prior_turn_messages(prior_turns)
+
     telemetry = telemetry if telemetry is not None else {}
     telemetry.update({
         'model': config.OLLAMA_MODEL,
@@ -1698,7 +1723,7 @@ def chat_with_llm(
         'tool_calls': [],
         'numeric_selection': False,
         'request_id': request_id,
-        'prior_turn_count_used': len(prior_turns) if prior_turns else 0,
+        'prior_turn_count_used': len(prepared_prior_turns),
     })
 
     # Handle speaking-style commands before any other routing.
@@ -1799,13 +1824,8 @@ def chat_with_llm(
         },
     ]
     
-    # Inject prior conversation history if available and memory is enabled
-    if prior_turns and config.CONVERSATION_MEMORY_ENABLED:
-        for turn in prior_turns:
-            messages.append({
-                "role": turn.get("role", "user"),
-                "content": turn.get("content", "")
-            })
+    # Inject sanitized bounded conversation history before the current message.
+    messages.extend(prepared_prior_turns)
     
     # Add current user message
     messages.append({"role": "user", "content": user_message})
