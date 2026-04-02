@@ -1676,8 +1676,18 @@ def chat_with_llm(
     state: dict = None,
     request_id: str = None,
     telemetry: dict = None,
+    prior_turns: list = None,
 ) -> str:
-    """Send a user message to the NeMo Claw model and handle tool calls."""
+    """Send a user message to the NeMo Claw model and handle tool calls.
+    
+    Args:
+        user_message: The current user's message
+        user_info: User information dict (contains plex_user if session-authenticated)
+        state: Mutable workflow state dict for tracking pending selections/tasks
+        request_id: Request correlation ID for observability
+        telemetry: Mutable dict for capturing metrics (llm_duration_ms, tool_calls, etc.)
+        prior_turns: List of prior conversation turns (dicts with role/content keys)
+    """
     if not client:
         return "AI Client is not initialized."
 
@@ -1688,6 +1698,7 @@ def chat_with_llm(
         'tool_calls': [],
         'numeric_selection': False,
         'request_id': request_id,
+        'prior_turn_count_used': len(prior_turns) if prior_turns else 0,
     })
 
     # Handle speaking-style commands before any other routing.
@@ -1786,8 +1797,18 @@ def chat_with_llm(
                 + style_suffix
             )
         },
-        {"role": "user", "content": user_message}
     ]
+    
+    # Inject prior conversation history if available and memory is enabled
+    if prior_turns and config.CONVERSATION_MEMORY_ENABLED:
+        for turn in prior_turns:
+            messages.append({
+                "role": turn.get("role", "user"),
+                "content": turn.get("content", "")
+            })
+    
+    # Add current user message
+    messages.append({"role": "user", "content": user_message})
 
     try:
         llm_started = time.perf_counter()

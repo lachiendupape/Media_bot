@@ -20,6 +20,7 @@ from api.radarr import credit_cache
 import notifications
 import plex_auth
 import config
+import memory
 from observability import (
     append_jsonl,
     clear_request_id,
@@ -56,6 +57,8 @@ _RECENT_REQUESTS = OrderedDict()
 _RECENT_REQUEST_LIMIT = 200
 _API_KEY_CHAT_STATES = OrderedDict()
 _API_KEY_CHAT_STATE_LIMIT = 200
+_REQUEST_COUNT_FOR_CLEANUP = 0  # Opportunistic TTL cleanup counter
+_CLEANUP_COUNTER_LOCK = threading.Lock()
 
 
 def _remember_request_context(request_id, payload):
@@ -99,6 +102,21 @@ def _auth_mode():
     if request.headers.get('X-Api-Key'):
         return 'api_key'
     return 'anonymous'
+
+
+def _get_memory_identity(user_info: dict = None, api_key_state_id: str = None) -> str | None:
+    """Get a stable memory identity for conversation history lookup.
+    
+    Returns:
+        - For session auth: Plex user ID (from session user_info)
+        - For API-key auth: hashed API key state ID
+        - For anonymous: None (memory disabled)
+    """
+    if user_info and isinstance(user_info, dict) and user_info.get('id'):
+        return f"plex_{user_info['id']}"
+    if api_key_state_id:
+        return f"api_{api_key_state_id}"
+    return None
 
 
 def _categorize_issue(description):
@@ -395,14 +413,33 @@ def chat():
         user_info = session.get('plex_user')
         chat_state, api_key_state = _load_chat_state_for_request()
         llm_telemetry = {}
+        
+        # Load prior conversation turns for context (if memory enabled)
+        prior_turns = []
+        memory_identity = _get_memory_identity(user_info, api_key_state)
+        if config.CONVERSATION_MEMORY_ENABLED and memory_identity:
+            prior_turns = memory.load_prior_turns(
+                identity=memory_identity,
+                max_turns=config.CONVERSATION_MEMORY_MAX_TURNS,
+                include_current=False
+            )
+            # Trim memory to max turns to enforce size limit
+            memory.trim_to_n(memory_identity, config.CONVERSATION_MEMORY_MAX_TURNS)
+        
         response_text = chat_with_llm(
             user_message,
             user_info=user_info,
             state=chat_state,
             request_id=g.request_id,
             telemetry=llm_telemetry,
+            prior_turns=prior_turns,
         )
         _save_chat_state_for_request(chat_state, api_key_state)
+        
+        # Save turns to conversation memory (if enabled)
+        if config.CONVERSATION_MEMORY_ENABLED and memory_identity:
+            memory.save_turn(memory_identity, "user", user_message)
+            memory.save_turn(memory_identity, "assistant", response_text)
 
         # Deliver any pending download notifications as a prefix to the response
         user_id = str(user_info.get('id', '')) if user_info else ''
@@ -434,8 +471,24 @@ def chat():
                 'tool_calls': llm_telemetry.get('tool_calls', []),
                 'fallback_tool_parser': llm_telemetry.get('fallback_tool_parser', False),
                 'response_length': len(response_text),
+                'prior_turn_count_used': llm_telemetry.get('prior_turn_count_used', 0),
             },
         )
+        
+        # Run opportunistic TTL cleanup on conversation memory
+        if config.CONVERSATION_MEMORY_ENABLED and config.CONVERSATION_MEMORY_TTL_HOURS > 0:
+            global _REQUEST_COUNT_FOR_CLEANUP
+            with _CLEANUP_COUNTER_LOCK:
+                _REQUEST_COUNT_FOR_CLEANUP += 1
+                if _REQUEST_COUNT_FOR_CLEANUP >= config.CONVERSATION_MEMORY_CLEANUP_INTERVAL:
+                    _REQUEST_COUNT_FOR_CLEANUP = 0
+                    try:
+                        ttl_seconds = config.CONVERSATION_MEMORY_TTL_HOURS * 3600
+                        memory.cleanup_expired_ttl(ttl_seconds)
+                        log.debug("Opportunistic TTL cleanup of conversation memory completed")
+                    except Exception:
+                        log.exception("Error during opportunistic TTL cleanup")
+        
         return jsonify({"response": response_text, "request_id": g.request_id, "version": config.APP_VERSION, "speaking_style": chat_state.get('speaking_style')})
     except Exception:
         log.exception("Error processing chat request")
