@@ -101,6 +101,11 @@ At minimum you need to set:
 | `QUOTA_ENABLED` | Set to `true` to enforce per-user daily download limits |
 | `DAILY_MOVIE_QUOTA` | Max movie downloads per user per day (0 = unlimited) |
 | `DAILY_TV_SERIES_QUOTA` | Max TV series downloads per user per day (0 = unlimited) |
+| `CONVERSATION_MEMORY_ENABLED` | Enable persistent multi-turn chat history across requests |
+| `CONVERSATION_MEMORY_MAX_TURNS` | Maximum stored turns retained per identity |
+| `CONVERSATION_MEMORY_TTL_HOURS` | Expire stored turns after this many hours (`0` disables TTL) |
+| `CONVERSATION_MEMORY_CLEANUP_INTERVAL` | Run TTL cleanup every N chat requests (`0` disables opportunistic cleanup) |
+| `CONVERSATION_MEMORY_PURGE_ON_LOGOUT` | Delete browser-session conversation history when the user logs out |
 
 Useful optional defaults for automated media adds:
 
@@ -214,7 +219,20 @@ curl -X POST http://localhost:5000/chat \
 | GET | `/auth/login` | None | Plex login page |
 | GET | `/auth/start` | None | Initiate Plex OAuth flow |
 | GET | `/auth/callback` | None | Plex OAuth callback |
-| GET | `/auth/logout` | None | Clear session |
+| GET | `/auth/logout` | None | Clear session and optionally purge browser-session memory |
+
+## Conversation Memory Lifecycle
+
+When `CONVERSATION_MEMORY_ENABLED=true`, Media Bot stores prior `user` and `assistant` turns per identity in `memory.db` and injects a bounded transcript into later chat requests.
+
+- Browser logins use `plex_<user_id>` as the memory identity.
+- API-key clients use `api_<hashed_api_key>` as the memory identity.
+- Workflow state such as pending title picks or season selections remains separate from the stored transcript.
+- The latest user/assistant exchange is saved first and then trimmed back to `CONVERSATION_MEMORY_MAX_TURNS`, so the newest reply is retained.
+- TTL expiry is opportunistic and runs every `CONVERSATION_MEMORY_CLEANUP_INTERVAL` chat requests when `CONVERSATION_MEMORY_TTL_HOURS > 0`.
+- Setting `CONVERSATION_MEMORY_CLEANUP_INTERVAL=0` disables opportunistic cleanup.
+- Setting `CONVERSATION_MEMORY_PURGE_ON_LOGOUT=true` deletes browser-session memory during `/auth/logout`.
+- API-key memory is not affected by `/auth/logout`; it ages out by TTL or remains until explicit purge tooling is added.
 
 ## Dev and Release Environments
 

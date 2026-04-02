@@ -88,6 +88,8 @@ CONVERSATION_MEMORY_MAX_TURNS = int(os.getenv("CONVERSATION_MEMORY_MAX_TURNS", "
 CONVERSATION_MEMORY_TTL_HOURS = int(os.getenv("CONVERSATION_MEMORY_TTL_HOURS", "24"))
 # Run TTL cleanup on every Nth request (0 disables opportunistic cleanup)
 CONVERSATION_MEMORY_CLEANUP_INTERVAL = int(os.getenv("CONVERSATION_MEMORY_CLEANUP_INTERVAL", "100"))
+# Purge stored browser-session conversation history on logout.
+CONVERSATION_MEMORY_PURGE_ON_LOGOUT = os.getenv("CONVERSATION_MEMORY_PURGE_ON_LOGOUT", "true").lower() in ("1", "true", "yes")
 
 # Flask
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")

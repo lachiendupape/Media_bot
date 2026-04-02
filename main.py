@@ -119,6 +119,29 @@ def _get_memory_identity(user_info: dict = None, api_key_state_id: str = None) -
     return None
 
 
+def _maybe_cleanup_conversation_memory() -> None:
+    if not config.CONVERSATION_MEMORY_ENABLED:
+        return
+    if config.CONVERSATION_MEMORY_TTL_HOURS <= 0:
+        return
+    if config.CONVERSATION_MEMORY_CLEANUP_INTERVAL <= 0:
+        return
+
+    global _REQUEST_COUNT_FOR_CLEANUP
+    with _CLEANUP_COUNTER_LOCK:
+        _REQUEST_COUNT_FOR_CLEANUP += 1
+        if _REQUEST_COUNT_FOR_CLEANUP < config.CONVERSATION_MEMORY_CLEANUP_INTERVAL:
+            return
+        _REQUEST_COUNT_FOR_CLEANUP = 0
+
+    try:
+        ttl_seconds = config.CONVERSATION_MEMORY_TTL_HOURS * 3600
+        memory.cleanup_expired_ttl(ttl_seconds)
+        log.debug("Opportunistic TTL cleanup of conversation memory completed")
+    except Exception:
+        log.exception("Error during opportunistic TTL cleanup")
+
+
 def _categorize_issue(description):
     """Categorize issue type based on description keywords."""
     desc_lower = description.lower()
@@ -368,6 +391,21 @@ def auth_callback():
 
 @app.route('/auth/logout')
 def auth_logout():
+    user_info = session.get('plex_user')
+    if config.CONVERSATION_MEMORY_ENABLED and config.CONVERSATION_MEMORY_PURGE_ON_LOGOUT:
+        memory_identity = _get_memory_identity(user_info=user_info)
+        if memory_identity:
+            try:
+                memory.delete_identity_all(memory_identity)
+                log.info(
+                    'chat.memory_purged_on_logout',
+                    extra={
+                        'auth_mode': 'session',
+                        'user_hash': hash_user_identifier(user_info),
+                    },
+                )
+            except Exception:
+                log.exception('Error purging conversation memory during logout')
     session.clear()
     return redirect(url_for('login_page'))
 
@@ -473,19 +511,7 @@ def chat():
             },
         )
         
-        # Run opportunistic TTL cleanup on conversation memory
-        if config.CONVERSATION_MEMORY_ENABLED and config.CONVERSATION_MEMORY_TTL_HOURS > 0:
-            global _REQUEST_COUNT_FOR_CLEANUP
-            with _CLEANUP_COUNTER_LOCK:
-                _REQUEST_COUNT_FOR_CLEANUP += 1
-                if _REQUEST_COUNT_FOR_CLEANUP >= config.CONVERSATION_MEMORY_CLEANUP_INTERVAL:
-                    _REQUEST_COUNT_FOR_CLEANUP = 0
-                    try:
-                        ttl_seconds = config.CONVERSATION_MEMORY_TTL_HOURS * 3600
-                        memory.cleanup_expired_ttl(ttl_seconds)
-                        log.debug("Opportunistic TTL cleanup of conversation memory completed")
-                    except Exception:
-                        log.exception("Error during opportunistic TTL cleanup")
+        _maybe_cleanup_conversation_memory()
         
         return jsonify({"response": response_text, "request_id": g.request_id, "version": config.APP_VERSION, "speaking_style": chat_state.get('speaking_style')})
     except Exception:
