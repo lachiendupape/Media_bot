@@ -1178,10 +1178,22 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
     pending_kids = state.get('pending_kids_check')
     if pending_kids:
         lower = trimmed.lower()
-        if re.search(r'\bkids?\b', lower):
-            is_kids = True
-        elif re.search(r'\badults?\b', lower):
+        has_kids = re.search(r'\bkids?\b', lower) is not None
+        has_adults = re.search(r'\badults?\b', lower) is not None
+        # Treat explicit negation like "not kids" / "no kids" as an adults preference.
+        negated_kids = re.search(r'\b(?:no|not)\s+kids?\b', lower) is not None
+
+        if has_kids and has_adults:
+            # Both keywords mentioned — ambiguous; ask again.
+            if pending_kids.get('kind') == 'series':
+                return "Your reply mentioned both **kids** and **adults**. Please reply with only **kids** or only **adults** to confirm if this show should go to kids TV or adults TV."
+            return "Your reply mentioned both **kids** and **adults**. Please reply with only **kids** or only **adults** to confirm the movie category."
+        elif negated_kids and not has_adults:
             is_kids = False
+        elif has_adults and not has_kids:
+            is_kids = False
+        elif has_kids and not has_adults:
+            is_kids = True
         else:
             if pending_kids.get('kind') == 'series':
                 return "Please reply with **kids** or **adults** to confirm if this show should go to kids TV or adults TV."
