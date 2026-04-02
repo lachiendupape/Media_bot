@@ -1126,6 +1126,28 @@ def _format_title_credits_results(results, title: str = None, role: str = None, 
     return "\n".join(lines).strip()
 
 
+def _extract_number_from_message(text: str) -> int | None:
+    """Extract a leading integer from a user message, ignoring trailing words like 'please'.
+
+    The word-boundary assertion ensures strings like '1abc' do not match; only digits
+    followed by whitespace, punctuation, or end-of-string are accepted.
+    """
+    m = re.match(r'^(\d+)\b', text.strip())
+    return int(m.group(1)) if m else None
+
+
+def _extract_season_from_message(text: str) -> int | None:
+    """Extract a season number from a user message.
+
+    Accepts forms like: '1', 'season 1', 'season 1 please', '1 please'.
+    """
+    m = re.search(r'\bseason\s*(\d+)\b', text.strip(), flags=re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    # Fall back to a bare leading number (e.g. "1 please")
+    return _extract_number_from_message(text)
+
+
 def _resolve_pending_numeric_selection(user_message: str, state: dict = None, user_info: dict = None) -> str | None:
     """Resolve numeric follow-ups for pending title disambiguation and series season selection."""
     if state is None:
@@ -1135,75 +1157,91 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
 
     # Pending movie disambiguation for add_radarr_movie flow.
     pending_movie = state.get('pending_movie_add')
-    if pending_movie and trimmed.isdigit():
-        index = int(trimmed)
-        options = pending_movie.get('options', [])
-        if index < 1 or index > len(options):
-            return f"Please choose a number between 1 and {len(options)}."
-        picked = options[index - 1]
-        state.pop('pending_movie_add', None)
-        return add_radarr_movie_handler(
-            pending_movie.get('query', picked.get('title', '')),
-            state=state,
-            preferred_tmdb_id=picked.get('tmdbId'),
-            preferred_year=picked.get('year'),
-            user_info=user_info,
-            is_kids=pending_movie.get('is_kids'),
-        )
+    if pending_movie:
+        index = _extract_number_from_message(trimmed)
+        if index is not None:
+            options = pending_movie.get('options', [])
+            if index < 1 or index > len(options):
+                return f"Please choose a number between 1 and {len(options)}."
+            picked = options[index - 1]
+            state.pop('pending_movie_add', None)
+            return add_radarr_movie_handler(
+                pending_movie.get('query', picked.get('title', '')),
+                state=state,
+                preferred_tmdb_id=picked.get('tmdbId'),
+                preferred_year=picked.get('year'),
+                user_info=user_info,
+                is_kids=pending_movie.get('is_kids'),
+            )
 
     # Pending kids/adults check for add_radarr_movie flow.
     pending_kids = state.get('pending_kids_check')
     if pending_kids:
         lower = trimmed.lower()
-        if lower in ('kids', 'adults', 'adult'):
-            is_kids = lower == 'kids'
-            state.pop('pending_kids_check', None)
+        has_kids = re.search(r'\bkids?\b', lower) is not None
+        has_adults = re.search(r'\badults?\b', lower) is not None
+        # Treat explicit negation like "not kids" / "no kids" as an adults preference.
+        negated_kids = re.search(r'\b(?:no|not)\s+kids?\b', lower) is not None
+
+        if has_kids and has_adults:
+            # Both keywords mentioned — ambiguous; ask again.
             if pending_kids.get('kind') == 'series':
-                return add_sonarr_series_handler(
-                    pending_kids.get('query', ''),
-                    season=pending_kids.get('season'),
-                    state=state,
-                    preferred_tvdb_id=pending_kids.get('tvdbId'),
-                    preferred_year=pending_kids.get('year'),
-                    user_info=user_info,
-                    is_kids=is_kids,
-                )
-            return add_radarr_movie_handler(
+                return "Your reply mentioned both **kids** and **adults**. Please reply with only **kids** or only **adults** to confirm if this show should go to kids TV or adults TV."
+            return "Your reply mentioned both **kids** and **adults**. Please reply with only **kids** or only **adults** to confirm the movie category."
+        elif negated_kids and not has_adults:
+            is_kids = False
+        elif has_adults and not has_kids:
+            is_kids = False
+        elif has_kids and not has_adults:
+            is_kids = True
+        else:
+            if pending_kids.get('kind') == 'series':
+                return "Please reply with **kids** or **adults** to confirm if this show should go to kids TV or adults TV."
+            return "Please reply with **kids** or **adults** to confirm the movie category."
+        state.pop('pending_kids_check', None)
+        if pending_kids.get('kind') == 'series':
+            return add_sonarr_series_handler(
                 pending_kids.get('query', ''),
+                season=pending_kids.get('season'),
                 state=state,
-                preferred_tmdb_id=pending_kids.get('tmdbId'),
+                preferred_tvdb_id=pending_kids.get('tvdbId'),
                 preferred_year=pending_kids.get('year'),
                 user_info=user_info,
                 is_kids=is_kids,
             )
-        if pending_kids.get('kind') == 'series':
-            return "Please reply with **kids** or **adults** to confirm if this show should go to kids TV or adults TV."
-        return "Please reply with **kids** or **adults** to confirm the movie category."
+        return add_radarr_movie_handler(
+            pending_kids.get('query', ''),
+            state=state,
+            preferred_tmdb_id=pending_kids.get('tmdbId'),
+            preferred_year=pending_kids.get('year'),
+            user_info=user_info,
+            is_kids=is_kids,
+        )
 
     # Pending series disambiguation for add_sonarr_series flow.
     pending_series_pick = state.get('pending_series_pick')
-    if pending_series_pick and trimmed.isdigit():
-        index = int(trimmed)
-        options = pending_series_pick.get('options', [])
-        if index < 1 or index > len(options):
-            return f"Please choose a number between 1 and {len(options)}."
-        picked = options[index - 1]
-        state.pop('pending_series_pick', None)
-        return add_sonarr_series_handler(
-            pending_series_pick.get('query', picked.get('title', '')),
-            state=state,
-            preferred_tvdb_id=picked.get('tvdbId'),
-            preferred_year=picked.get('year'),
-            user_info=user_info,
-            is_kids=pending_series_pick.get('is_kids'),
-        )
+    if pending_series_pick:
+        index = _extract_number_from_message(trimmed)
+        if index is not None:
+            options = pending_series_pick.get('options', [])
+            if index < 1 or index > len(options):
+                return f"Please choose a number between 1 and {len(options)}."
+            picked = options[index - 1]
+            state.pop('pending_series_pick', None)
+            return add_sonarr_series_handler(
+                pending_series_pick.get('query', picked.get('title', '')),
+                state=state,
+                preferred_tvdb_id=picked.get('tvdbId'),
+                preferred_year=picked.get('year'),
+                user_info=user_info,
+                is_kids=pending_series_pick.get('is_kids'),
+            )
 
     # Pending season selection for add_sonarr_series flow.
     pending_series = state.get('pending_series_add')
     if pending_series:
-        m = re.match(r'^(?:season\s*)?(\d+)$', trimmed, flags=re.IGNORECASE)
-        if m:
-            season = int(m.group(1))
+        season = _extract_season_from_message(trimmed)
+        if season is not None:
             available = pending_series.get('available_seasons', [])
             if available and season not in available:
                 return (
@@ -1223,10 +1261,9 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
     pending = state.get('pending_title_lookup')
     if not pending:
         return None
-    if not trimmed.isdigit():
+    index = _extract_number_from_message(trimmed)
+    if index is None:
         return None
-
-    index = int(trimmed)
     options = pending.get('options', [])
     if index < 1 or index > len(options):
         return f"Please choose a number between 1 and {len(options)}."
