@@ -85,6 +85,27 @@
             border-color: #ff6b6b;
             color: #ff6b6b;
         }
+        .quick-action-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 4px 0 10px 0;
+            align-self: flex-start;
+        }
+        .quick-action-btn {
+            padding: 7px 14px;
+            border-radius: 20px;
+            border: 1px solid #0f3460;
+            background: #1a1a2e;
+            color: #a8b2d8;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .quick-action-btn:hover {
+            background: #0f3460;
+            color: #fff;
+        }
         .input-area {
             padding: 16px 24px;
             background: #16213e;
@@ -273,8 +294,13 @@ I can also switch up how I reply. Try something like "speak like a pirate" or "r
 
 If you want the full list, just say <strong>help</strong> or <strong>what can you do</strong>.
 
-I’m only working with your own library and connected services, not the wider internet.</div>
-    </div>
+I’m only working with your own library and connected services, not the wider internet.</div>{% if next_season_suggestions %}
+        <div class="quick-action-row">
+{% for s in next_season_suggestions %}
+          <button class="quick-action-btn" onclick="sendMessage('Add {{ s.show }} Season {{ s.next_season }}')" type="button">▶ Queue {{ s.show }} Season {{ s.next_season }}</button>
+{% endfor %}
+        </div>
+{% endif %}    </div>
     <div class="input-area">
         <input type="text" id="msgInput" placeholder="Try: add Sinners, who starred in Heat, or what can you do?" autocomplete="off">
         <button id="sendBtn">Send</button>
@@ -476,6 +502,11 @@ I’m only working with your own library and connected services, not the wider i
 
         btn.addEventListener('click', send);
         input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+
+        function sendMessage(text) {
+            input.value = text;
+            send();
+        }
         reportBugBtn.addEventListener('click', openBugModal);
         cancelBugBtn.addEventListener('click', closeBugModal);
         submitBugBtn.addEventListener('click', submitBugReport);

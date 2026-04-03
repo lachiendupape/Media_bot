@@ -8,10 +8,27 @@ import logging
 import threading
 import time
 from collections import Counter
+from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import requests
 
 import config
+
+
+@dataclass
+class SeasonSuggestion:
+    """A next-season suggestion derived from watch history."""
+    show: str
+    completed_season: int
+    next_season: int
+
+
+@dataclass
+class WelcomeData:
+    """Structured result from build_weekly_usage_message."""
+    text: str
+    suggestions: list[SeasonSuggestion] = field(default_factory=list)
 
 log = logging.getLogger(__name__)
 
@@ -19,9 +36,9 @@ log = logging.getLogger(__name__)
 class _UsageCache:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._entries: dict[str, tuple[float, str | None]] = {}
+        self._entries: dict[str, tuple[float, WelcomeData | None]] = {}
 
-    def get(self, key: str) -> str | None | object:
+    def get(self, key: str) -> WelcomeData | None | object:
         if config.TAUTULLI_WELCOME_CACHE_SECONDS <= 0:
             return _CACHE_MISS
         with self._lock:
@@ -34,7 +51,7 @@ class _UsageCache:
                 return _CACHE_MISS
             return value
 
-    def set(self, key: str, value: str | None) -> None:
+    def set(self, key: str, value: WelcomeData | None) -> None:
         if config.TAUTULLI_WELCOME_CACHE_SECONDS <= 0:
             return
         with self._lock:
@@ -112,7 +129,7 @@ def _season_episode_total(season: dict) -> int:
     return 0
 
 
-def _build_phase2_suggestions(history_rows: list[dict], cutoff: int) -> list[str]:
+def _build_phase2_suggestions(history_rows: list[dict], cutoff: int) -> list[SeasonSuggestion]:
     if not config.TAUTULLI_PHASE2_ENABLED:
         return []
 
@@ -209,10 +226,11 @@ def _build_phase2_suggestions(history_rows: list[dict], cutoff: int) -> list[str
         if _season_episode_total(next_season) <= 0:
             continue
 
-        suggestions.append(
-            f"- You may have finished {show_name} Season {completed_season}. "
-            f"Want me to queue Season {next_season_number}?"
-        )
+        suggestions.append(SeasonSuggestion(
+            show=show_name,
+            completed_season=completed_season,
+            next_season=next_season_number,
+        ))
 
     return suggestions
 
@@ -258,7 +276,7 @@ def _format_weekly_summary(
     username: str,
     history_rows: list[dict],
     now_ts: int | None = None,
-) -> str | None:
+) -> WelcomeData | None:
     if not history_rows:
         return None
 
@@ -298,6 +316,8 @@ def _format_weekly_summary(
     if episodes == 0 and movies == 0:
         return None
 
+    phase2_suggestions = _build_phase2_suggestions(history_rows, cutoff)
+
     top_n = max(1, config.TAUTULLI_WELCOME_TOP_SHOWS)
     top_show_lines: list[str] = []
     for name, count in top_shows.most_common(top_n):
@@ -323,18 +343,21 @@ def _format_weekly_summary(
         message_lines.append('Top shows:')
         message_lines.extend(top_show_lines)
 
-    phase2_suggestions = _build_phase2_suggestions(history_rows, cutoff)
     if phase2_suggestions:
         message_lines.append('Up next:')
-        message_lines.extend(phase2_suggestions)
+        for s in phase2_suggestions:
+            message_lines.append(
+                f"- You may have finished {s.show} Season {s.completed_season}."
+            )
 
-    return "\n".join(message_lines)
+    return WelcomeData(text="\n".join(message_lines), suggestions=phase2_suggestions)
 
 
-def build_weekly_usage_message(plex_username: str) -> str | None:
+def build_weekly_usage_message(plex_username: str) -> WelcomeData | None:
     """Return a weekly usage summary for the given Plex username.
 
     Returns None when disabled, unavailable, or no recent activity exists.
+    Returns a WelcomeData with .text and .suggestions otherwise.
     """
     if not config.TAUTULLI_WELCOME_ENABLED:
         return None
@@ -357,6 +380,7 @@ def build_weekly_usage_message(plex_username: str) -> str | None:
     message = _format_weekly_summary(username, history_rows)
     _cache.set(cache_key, message)
     return message
+
 
 
 def build_phase2_series_followup_hint() -> str:

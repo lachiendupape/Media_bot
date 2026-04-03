@@ -19,10 +19,10 @@ def test_format_weekly_summary_counts_and_top_shows(monkeypatch):
     message = tautulli_usage._format_weekly_summary('alex', rows, now_ts=now)
 
     assert message is not None
-    assert 'Welcome back, alex' in message
-    assert 'watched 3 episodes and 1 movie' in message
-    assert '- Bluey: 2 episodes' in message
-    assert '- Severance: 1 episode' in message
+    assert 'Welcome back, alex' in message.text
+    assert 'watched 3 episodes and 1 movie' in message.text
+    assert '- Bluey: 2 episodes' in message.text
+    assert '- Severance: 1 episode' in message.text
 
 
 def test_format_weekly_summary_returns_none_with_no_recent_activity(monkeypatch):
@@ -86,8 +86,12 @@ def test_phase2_suggests_next_season_when_completion_threshold_met(monkeypatch):
     message = tautulli_usage._format_weekly_summary('alex', rows, now_ts=now)
 
     assert message is not None
-    assert 'Up next:' in message
-    assert 'Want me to queue Season 2?' in message
+    assert 'Up next:' in message.text
+    assert 'finished Bluey Season 1' in message.text
+    assert len(message.suggestions) == 1
+    assert message.suggestions[0].show == 'Bluey'
+    assert message.suggestions[0].completed_season == 1
+    assert message.suggestions[0].next_season == 2
 
 
 def test_phase2_skips_suggestion_when_next_season_missing(monkeypatch):
@@ -124,4 +128,5 @@ def test_phase2_skips_suggestion_when_next_season_missing(monkeypatch):
     message = tautulli_usage._format_weekly_summary('alex', rows, now_ts=now)
 
     assert message is not None
-    assert 'Up next:' not in message
+    assert 'Up next:' not in message.text
+    assert message.suggestions == []

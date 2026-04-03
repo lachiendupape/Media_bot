@@ -417,11 +417,12 @@ def auth_logout():
 @require_auth
 def index():
     user = session['plex_user']
-    usage_summary = tautulli_usage.build_weekly_usage_message(user.get('username', ''))
+    welcome_data = tautulli_usage.build_weekly_usage_message(user.get('username', ''))
     return render_template(
         'chat.html',
         user=user,
-        usage_summary=usage_summary,
+        usage_summary=welcome_data.text if welcome_data else None,
+        next_season_suggestions=welcome_data.suggestions if welcome_data else [],
         app_version=config.APP_VERSION,
         flask_env=os.getenv('FLASK_ENV', 'development'),
         plex_server_name=config.PLEX_APP_NAME,
