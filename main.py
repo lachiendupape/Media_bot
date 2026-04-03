@@ -18,6 +18,7 @@ from flask import Flask, Response, g, request, jsonify, session, redirect, url_f
 from llm import chat_with_llm
 from api.radarr import credit_cache
 import notifications
+import tautulli_usage
 import plex_auth
 import config
 import memory
@@ -415,9 +416,12 @@ def auth_logout():
 @app.route('/')
 @require_auth
 def index():
+    user = session['plex_user']
+    usage_summary = tautulli_usage.build_weekly_usage_message(user.get('username', ''))
     return render_template(
         'chat.html',
-        user=session['plex_user'],
+        user=user,
+        usage_summary=usage_summary,
         app_version=config.APP_VERSION,
         flask_env=os.getenv('FLASK_ENV', 'development'),
         plex_server_name=config.PLEX_APP_NAME,

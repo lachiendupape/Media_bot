@@ -86,6 +86,12 @@ At minimum you need to set:
 | `PLEX_TOKEN` | Optional Plex token used for TV cast lookups |
 | `PLEX_MACHINE_ID` | Plex server machine identifier |
 | `PLEX_CLIENT_ID` | A random UUID for this app |
+| `TAUTULLI_URL` | Tautulli base URL used for usage analytics |
+| `TAUTULLI_API_KEY` | Tautulli API key |
+| `TAUTULLI_WELCOME_ENABLED` | Enable personalized weekly usage text in welcome message |
+| `TAUTULLI_WELCOME_DAYS` | Lookback window in days for usage summary metrics |
+| `TAUTULLI_WELCOME_TOP_SHOWS` | Number of top watched shows to include |
+| `TAUTULLI_WELCOME_CACHE_SECONDS` | Cache TTL for per-user usage summary lookups |
 | `OWNER_PLEX_USERNAME` | Plex username of the server owner (for delete permissions) |
 | `OLLAMA_BASE_URL` | Ollama API URL (default `http://127.0.0.1:11434`, set automatically in Docker) |
 | `OLLAMA_MODEL` | Default Ollama model name when not overridden by compose |
@@ -274,6 +280,22 @@ Guardrails:
 - Auto-fix runs only on issues explicitly labeled `autofix-candidate`.
 - PRs are opened as draft and require human approval.
 - If validation fails, no PR is opened and the issue gets a status comment.
+
+## Personalized Usage Welcome
+
+When `TAUTULLI_WELCOME_ENABLED=true`, the initial chat welcome message can include
+per-user usage insights from Tautulli for the last `TAUTULLI_WELCOME_DAYS` days:
+
+- episode count
+- movie count
+- top watched shows (by episodes watched)
+
+If Tautulli is unavailable, user mapping fails, or no recent activity exists,
+the app silently falls back to the default welcome text.
+
+Phase 2 candidate:
+
+- detect when a user finishes a series and offer to queue the next season
 
 Release tagging example:
 

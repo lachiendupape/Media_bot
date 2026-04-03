@@ -263,6 +263,10 @@
     <div class="chat-area" id="chatArea">
         <div class="msg bot">Hi {{ user.username }}! I’m here to help with your <strong>{{ plex_server_name or 'Plex' }} library</strong>.
 
+{% if usage_summary %}{{ usage_summary }}
+
+{% endif %}
+
 You can ask me to find cast or directors, add movies or TV, clean up media if you’re the owner, or suggest something similar to a title you already have.
 
 I can also switch up how I reply. Try something like "speak like a pirate" or "reset style".
