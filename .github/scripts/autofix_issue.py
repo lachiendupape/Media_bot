@@ -23,6 +23,7 @@ def _safe_text(value: str) -> str:
 
 
 def main() -> int:
+    issue_number = _safe_text(os.getenv("ISSUE_NUMBER", ""))
     issue_title = _safe_text(os.getenv("ISSUE_TITLE", ""))
     issue_body = _safe_text(os.getenv("ISSUE_BODY", ""))
     extra_command = os.getenv("AUTOFIX_EXTRA_COMMAND", "").strip()
@@ -31,6 +32,13 @@ def main() -> int:
     issue_text = f"{issue_title}\n{issue_body}"
     commands = []
     notes = []
+
+    # Explicit smoke-test mode for validating the automation pipeline itself.
+    if "autofix-smoke" in issue_text:
+        marker_path = os.path.join(".github", "autofix-smoke-marker.txt")
+        with open(marker_path, "a", encoding="utf-8") as marker:
+            marker.write(f"issue={issue_number or 'unknown'}\n")
+        notes.append("Updated autofix smoke marker")
 
     if re.search(r"unused import|\bruff\b|\blint\b", issue_text):
         commands.append("ruff check . --fix")
@@ -41,7 +49,7 @@ def main() -> int:
         commands.append(extra_command)
         notes.append(f"Ran AUTOFIX_EXTRA_COMMAND: {extra_command}")
 
-    if not commands:
+    if not commands and not notes:
         _set_output("changes_detected", "false")
         _set_output("validation_passed", "false")
         _set_output("notes", "No applicable low-risk autofix heuristic matched")
