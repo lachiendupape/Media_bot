@@ -66,6 +66,7 @@ jobs:
           BASE_BRANCH: ${{ github.event.repository.default_branch }}
           HEAD_BRANCH: ${{ steps.branch.outputs.branch }}
         run: |
+          set +e
           EXISTING=$(gh pr list --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number')
           if [ -n "$EXISTING" ]; then
             echo "pr_number=$EXISTING" >> "$GITHUB_OUTPUT"
@@ -89,7 +90,15 @@ jobs:
             --base "$BASE_BRANCH" \
             --head "$HEAD_BRANCH" \
             --title "Autofix: #${ISSUE_NUMBER} ${ISSUE_TITLE}" \
-            --body "$BODY")
+            --body "$BODY" 2>&1)
+
+          if [ $? -ne 0 ]; then
+            echo "pr_create_failed=true" >> "$GITHUB_OUTPUT"
+            echo "pr_create_error<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$PR_URL" >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
@@ -102,6 +111,8 @@ jobs:
           VALIDATION_PASSED: ${{ steps.autofix.outputs.validation_passed }}
           AUTOFIX_NOTES: ${{ steps.autofix.outputs.notes }}
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          PR_CREATE_FAILED: ${{ steps.pr.outputs.pr_create_failed }}
+          PR_CREATE_ERROR: ${{ steps.pr.outputs.pr_create_error }}
         with:
           script: |
             const issueNumber = context.payload.issue.number;
@@ -109,6 +120,8 @@ jobs:
             const valid = process.env.VALIDATION_PASSED === 'true';
             const notes = process.env.AUTOFIX_NOTES || 'No notes';
             const pr = process.env.PR_NUMBER;
+            const prCreateFailed = process.env.PR_CREATE_FAILED === 'true';
+            const prCreateError = process.env.PR_CREATE_ERROR || '';
 
             let body;
             if (changes && valid && pr) {
@@ -118,6 +131,18 @@ jobs:
                 `Notes: ${notes}`,
                 '',
                 'Human approval is required before merge.'
+              ].join('\n');
+            } else if (changes && valid && prCreateFailed) {
+              body = [
+                'Autofix produced a valid change, but this workflow could not create a PR with the current token permissions.',
+                '',
+                `Notes: ${notes}`,
+                '',
+                'Action required:',
+                '- Enable "Allow GitHub Actions to create and approve pull requests" in repository settings, or',
+                '- Use a PAT-based token for PR creation in this workflow.',
+                '',
+                `Error: ${prCreateError}`,
               ].join('\n');
             } else if (changes && !valid) {
               body = [
