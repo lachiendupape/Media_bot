@@ -80,8 +80,7 @@ def _find_tautulli_user_id(plex_username: str) -> str | None:
     if not users:
         return None
 
-    data = users.get('data')
-    rows = data if isinstance(data, list) else users
+    rows = users if isinstance(users, list) else users.get('data', [])
     if not isinstance(rows, list):
         return None
 
@@ -163,18 +162,23 @@ def _format_weekly_summary(
         suffix = 'episode' if count == 1 else 'episodes'
         top_show_lines.append(f"- {name}: {count} {suffix}")
 
-    pace = 'busy' if (episodes + movies) >= 5 else 'steady'
     episode_word = 'episode' if episodes == 1 else 'episodes'
     movie_word = 'movie' if movies == 1 else 'movies'
     days = max(1, config.TAUTULLI_WELCOME_DAYS)
 
+    if episodes > 0 and movies > 0:
+        stats = f"{episodes} {episode_word} and {movies} {movie_word}"
+    elif episodes > 0:
+        stats = f"{episodes} {episode_word}"
+    else:
+        stats = f"{movies} {movie_word}"
+
     message_lines = [
-        f"Hey {username}, this week you've been {pace}.",
-        f"In the last {days} days you watched {episodes} {episode_word} and {movies} {movie_word}.",
+        f"Welcome back, {username}. In the last {days} days you watched {stats}.",
     ]
 
     if top_show_lines:
-        message_lines.append('Your top shows this week were:')
+        message_lines.append('Top shows:')
         message_lines.extend(top_show_lines)
 
     return "\n".join(message_lines)
