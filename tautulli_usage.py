@@ -45,7 +45,7 @@ _CACHE_MISS = object()
 _cache = _UsageCache()
 
 
-def _call_tautulli(cmd: str, **params) -> dict | None:
+def _call_tautulli(cmd: str, **params) -> dict | list | None:
     if not config.TAUTULLI_URL or not config.TAUTULLI_API_KEY:
         return None
 
@@ -73,6 +73,148 @@ def _call_tautulli(cmd: str, **params) -> dict | None:
         return None
 
     return payload.get('data') or {}
+
+
+def _to_positive_int(value) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _get_sonarr_client():
+    if not config.SONARR_URL or not config.SONARR_API_KEY:
+        return None
+    try:
+        from api.sonarr import SonarrAPI
+
+        return SonarrAPI()
+    except Exception:
+        log.exception('sonarr.client_init_failed')
+        return None
+
+
+def _season_episode_total(season: dict) -> int:
+    stats = season.get('statistics') if isinstance(season, dict) else None
+    if not isinstance(stats, dict):
+        return 0
+
+    candidates = (
+        stats.get('episodeCount'),
+        stats.get('totalEpisodeCount'),
+        stats.get('episodeFileCount'),
+    )
+    for value in candidates:
+        parsed = _to_positive_int(value)
+        if parsed is not None:
+            return parsed
+    return 0
+
+
+def _build_phase2_suggestions(history_rows: list[dict], cutoff: int) -> list[str]:
+    if not config.TAUTULLI_PHASE2_ENABLED:
+        return []
+
+    sonarr = _get_sonarr_client()
+    if sonarr is None:
+        return []
+
+    # watched[show][season] = set(unique episode numbers watched in lookback window)
+    watched: dict[str, dict[int, set[int]]] = {}
+
+    for row in history_rows:
+        if not isinstance(row, dict):
+            continue
+
+        try:
+            watched_at = int(row.get('date') or 0)
+        except (TypeError, ValueError):
+            watched_at = 0
+        if watched_at < cutoff:
+            continue
+
+        if str(row.get('media_type', '')).lower() != 'episode':
+            continue
+
+        show_name = (
+            str(row.get('grandparent_title') or '').strip()
+            or str(row.get('parent_title') or '').strip()
+            or str(row.get('title') or '').strip()
+        )
+        season_number = _to_positive_int(row.get('parent_media_index'))
+        episode_number = _to_positive_int(row.get('media_index'))
+        if not show_name or season_number is None or episode_number is None:
+            continue
+
+        by_season = watched.setdefault(show_name, {})
+        by_season.setdefault(season_number, set()).add(episode_number)
+
+    if not watched:
+        return []
+
+    min_ratio = max(0.5, min(1.0, float(config.TAUTULLI_PHASE2_MIN_COMPLETION_RATIO)))
+    max_suggestions = max(0, int(config.TAUTULLI_PHASE2_MAX_SUGGESTIONS))
+    if max_suggestions == 0:
+        return []
+
+    suggestions: list[str] = []
+    for show_name, by_season in watched.items():
+        if len(suggestions) >= max_suggestions:
+            break
+
+        try:
+            matches = sonarr.find_series_in_library(show_name) or []
+        except Exception:
+            log.exception('sonarr.series_lookup_failed', extra={'show_name': show_name})
+            continue
+        if not matches:
+            continue
+
+        show_key = show_name.strip().lower()
+        series = next(
+            (s for s in matches if str(s.get('title', '')).strip().lower() == show_key),
+            matches[0],
+        )
+
+        seasons = series.get('seasons')
+        if not isinstance(seasons, list):
+            continue
+        season_map = {
+            s.get('seasonNumber'): s
+            for s in seasons
+            if isinstance(s, dict) and _to_positive_int(s.get('seasonNumber')) is not None
+        }
+
+        completed_season = None
+        for season_number, episode_set in sorted(by_season.items(), reverse=True):
+            season_payload = season_map.get(season_number)
+            if not season_payload:
+                continue
+            total_episodes = _season_episode_total(season_payload)
+            if total_episodes <= 0:
+                continue
+            completion = len(episode_set) / total_episodes
+            if completion >= min_ratio:
+                completed_season = season_number
+                break
+
+        if completed_season is None:
+            continue
+
+        next_season_number = completed_season + 1
+        next_season = season_map.get(next_season_number)
+        if not next_season:
+            continue
+        if _season_episode_total(next_season) <= 0:
+            continue
+
+        suggestions.append(
+            f"- You may have finished {show_name} Season {completed_season}. "
+            f"Want me to queue Season {next_season_number}?"
+        )
+
+    return suggestions
 
 
 def _find_tautulli_user_id(plex_username: str) -> str | None:
@@ -105,7 +247,7 @@ def _load_recent_history(user_id: str, length: int = 500) -> list[dict]:
     if not history:
         return []
 
-    rows = history.get('data')
+    rows = history if isinstance(history, list) else history.get('data')
     if not isinstance(rows, list):
         return []
 
@@ -180,6 +322,11 @@ def _format_weekly_summary(
     if top_show_lines:
         message_lines.append('Top shows:')
         message_lines.extend(top_show_lines)
+
+    phase2_suggestions = _build_phase2_suggestions(history_rows, cutoff)
+    if phase2_suggestions:
+        message_lines.append('Up next:')
+        message_lines.extend(phase2_suggestions)
 
     return "\n".join(message_lines)
 

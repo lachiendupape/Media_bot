@@ -92,6 +92,9 @@ At minimum you need to set:
 | `TAUTULLI_WELCOME_DAYS` | Lookback window in days for usage summary metrics |
 | `TAUTULLI_WELCOME_TOP_SHOWS` | Number of top watched shows to include |
 | `TAUTULLI_WELCOME_CACHE_SECONDS` | Cache TTL for per-user usage summary lookups |
+| `TAUTULLI_PHASE2_ENABLED` | Enable Phase 2A season completion suggestions in welcome text |
+| `TAUTULLI_PHASE2_MIN_COMPLETION_RATIO` | Fraction of a season watched before suggesting next season |
+| `TAUTULLI_PHASE2_MAX_SUGGESTIONS` | Maximum number of next-season suggestions to include |
 | `OWNER_PLEX_USERNAME` | Plex username of the server owner (for delete permissions) |
 | `OLLAMA_BASE_URL` | Ollama API URL (default `http://127.0.0.1:11434`, set automatically in Docker) |
 | `OLLAMA_MODEL` | Default Ollama model name when not overridden by compose |
@@ -293,9 +296,12 @@ per-user usage insights from Tautulli for the last `TAUTULLI_WELCOME_DAYS` days:
 If Tautulli is unavailable, user mapping fails, or no recent activity exists,
 the app silently falls back to the default welcome text.
 
-Phase 2 candidate:
+Phase 2A (implemented):
 
-- detect when a user finishes a series and offer to queue the next season
+- detect likely season completion from recent watch history
+- show an "Up next" suggestion to queue the next season (suggestion only)
+
+Enable with `TAUTULLI_PHASE2_ENABLED=true`.
 
 Release tagging example:
 
