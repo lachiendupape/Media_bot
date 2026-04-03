@@ -1,0 +1,141 @@
+name: Autofix Draft PR
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  autofix:
+    if: github.event.label.name == 'autofix-candidate'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install ruff
+
+      - name: Create working branch
+        id: branch
+        run: |
+          BRANCH="autofix/issue-${{ github.event.issue.number }}"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Attempt automated fix
+        id: autofix
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: python .github/scripts/autofix_issue.py
+
+      - name: Commit and push autofix branch
+        if: steps.autofix.outputs.changes_detected == 'true' && steps.autofix.outputs.validation_passed == 'true'
+        env:
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: autofix issue #${ISSUE_NUMBER}"
+          git push --set-upstream origin "${{ steps.branch.outputs.branch }}"
+
+      - name: Open or update draft PR
+        if: steps.autofix.outputs.changes_detected == 'true' && steps.autofix.outputs.validation_passed == 'true'
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          HEAD_BRANCH: ${{ steps.branch.outputs.branch }}
+        run: |
+          EXISTING=$(gh pr list --head "$HEAD_BRANCH" --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            echo "pr_number=$EXISTING" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BODY=$(cat <<EOF
+          Automated low-risk fix attempt generated from issue #${ISSUE_NUMBER}.
+
+          Guardrails used:
+          - Triggered only from autofix-candidate label
+          - Validation command must pass before PR is created
+          - PR is opened as draft for human review
+
+          Closes #${ISSUE_NUMBER}
+          EOF
+          )
+
+          PR_URL=$(gh pr create \
+            --draft \
+            --base "$BASE_BRANCH" \
+            --head "$HEAD_BRANCH" \
+            --title "Autofix: #${ISSUE_NUMBER} ${ISSUE_TITLE}" \
+            --body "$BODY")
+
+          PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+
+      - name: Comment issue with result
+        if: always()
+        uses: actions/github-script@v8
+        env:
+          CHANGES_DETECTED: ${{ steps.autofix.outputs.changes_detected }}
+          VALIDATION_PASSED: ${{ steps.autofix.outputs.validation_passed }}
+          AUTOFIX_NOTES: ${{ steps.autofix.outputs.notes }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        with:
+          script: |
+            const issueNumber = context.payload.issue.number;
+            const changes = process.env.CHANGES_DETECTED === 'true';
+            const valid = process.env.VALIDATION_PASSED === 'true';
+            const notes = process.env.AUTOFIX_NOTES || 'No notes';
+            const pr = process.env.PR_NUMBER;
+
+            let body;
+            if (changes && valid && pr) {
+              body = [
+                `Autofix workflow created/updated draft PR #${pr}.`,
+                '',
+                `Notes: ${notes}`,
+                '',
+                'Human approval is required before merge.'
+              ].join('\n');
+            } else if (changes && !valid) {
+              body = [
+                'Autofix attempted changes, but validation failed so no PR was opened.',
+                '',
+                `Notes: ${notes}`,
+              ].join('\n');
+            } else {
+              body = [
+                'Autofix did not find a safe automatic change for this issue.',
+                '',
+                `Notes: ${notes}`,
+              ].join('\n');
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body,
+            });

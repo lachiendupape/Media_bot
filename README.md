@@ -247,6 +247,34 @@ Typical workflow:
 3. Deploy and validate in dev first (`Deploy Dev` workflow or `scripts/deploy-dev.ps1`).
 4. Manually promote to prod (`Promote To Prod` workflow) after dev checks pass.
 
+## Feedback Loop Automation
+
+Media Bot now includes a safe first-pass automation loop for user bug feedback:
+
+1. `Feedback Triage` workflow (`.github/workflows/feedback-triage.yml`)
+  - Triggers when a `type/bug` issue is opened or reopened.
+  - Applies severity and area labels from issue content.
+  - Marks incomplete reports with `triage/needs-info`.
+  - Marks low-risk reports as `autofix-candidate`.
+
+2. `Autofix Draft PR` workflow (`.github/workflows/autofix-draft-pr.yml`)
+  - Triggers when an issue receives the `autofix-candidate` label.
+  - Runs conservative auto-fix routines (for example ruff import/lint fixes).
+  - Validates changes before opening a PR.
+  - Opens a draft PR for human review (no direct merge).
+
+Repository variables for tuning auto-fix behavior:
+
+- `AUTOFIX_EXTRA_COMMAND` (optional): extra command to run for repo-specific fixes.
+- `AUTOFIX_VALIDATE_COMMAND` (optional): validation command override.
+  - Default: `ruff check . && python -m compileall -q .`
+
+Guardrails:
+
+- Auto-fix runs only on issues explicitly labeled `autofix-candidate`.
+- PRs are opened as draft and require human approval.
+- If validation fails, no PR is opened and the issue gets a status comment.
+
 Release tagging example:
 
 ```bash
