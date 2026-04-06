@@ -500,13 +500,26 @@ def _detect_style_command(message: str) -> tuple[str | None, bool]:
     return None, False
 
 
+def _is_selection_prompt(text: str) -> bool:
+    """Return True if *text* is a numbered disambiguation or selection prompt.
+
+    These responses contain a numbered list that the user must reply to with a
+    number, so they must not be restyled through the LLM — doing so risks the
+    model dropping the list items or introducing garbage text.
+    """
+    return bool(re.search(r'^\d+\.\s', text, re.MULTILINE))
+
+
 def _apply_speaking_style(text: str, style: str) -> str:
     """Restyle *text* through the LLM using the given speaking *style*.
 
-    Returns the original text unchanged if the LLM call fails or the style
-    is not recognised.
+    Returns the original text unchanged if the LLM call fails, the style is
+    not recognised, or the text is a numbered selection prompt (restyling those
+    risks the model dropping list items or generating garbage).
     """
     if not client or not text or style not in SPEAKING_STYLES:
+        return text
+    if _is_selection_prompt(text):
         return text
     style_instruction = SPEAKING_STYLES[style]
     try:
