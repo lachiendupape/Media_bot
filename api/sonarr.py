@@ -83,6 +83,14 @@ class SonarrAPI:
             print(f"Error getting disk space from Sonarr: {e}")
             return None
 
+    def get_queue(self):
+        """Gets the active download/import queue from Sonarr."""
+        try:
+            return self._get('/api/v3/queue')
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting queue from Sonarr: {e}")
+            return None
+
     def lookup_series(self, term):
         """Looks up a series by search term in Sonarr."""
         try:

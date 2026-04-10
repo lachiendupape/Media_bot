@@ -23,11 +23,6 @@ SONARR_URL = os.getenv("SONARR_URL")
 SONARR_API_KEY = os.getenv("SONARR_API_KEY")
 LIDARR_URL = os.getenv("LIDARR_URL")
 LIDARR_API_KEY = os.getenv("LIDARR_API_KEY")
-NZBGET_URL = os.getenv("NZBGET_URL")
-NZBGET_USER = os.getenv("NZBGET_USER")
-NZBGET_PASS = os.getenv("NZBGET_PASS")
-NZBHYDRA_URL = os.getenv("NZBHYDRA_URL")
-NZBHYDRA_API_KEY = os.getenv("NZBHYDRA_API_KEY")
 
 # Plex OAuth
 PLEX_SERVER_URL = os.getenv("PLEX_SERVER_URL")

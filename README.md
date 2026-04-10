@@ -88,7 +88,7 @@ At minimum you need to set:
 | `PLEX_CLIENT_ID` | A random UUID for this app |
 | `TAUTULLI_URL` | Tautulli base URL used for usage analytics |
 | `TAUTULLI_API_KEY` | Tautulli API key |
-| `TAUTULLI_WELCOME_ENABLED` | Enable personalized weekly usage text in welcome message |
+| `TAUTULLI_WELCOME_ENABLED` | Enable personalized weekly usage text in welcome message (default `false`) |
 | `TAUTULLI_WELCOME_DAYS` | Lookback window in days for usage summary metrics |
 | `TAUTULLI_WELCOME_TOP_SHOWS` | Number of top watched shows to include |
 | `TAUTULLI_WELCOME_CACHE_SECONDS` | Cache TTL for per-user usage summary lookups |
@@ -110,7 +110,7 @@ At minimum you need to set:
 | `QUOTA_ENABLED` | Set to `true` to enforce per-user daily download limits |
 | `DAILY_MOVIE_QUOTA` | Max movie downloads per user per day (0 = unlimited) |
 | `DAILY_TV_SERIES_QUOTA` | Max TV series downloads per user per day (0 = unlimited) |
-| `CONVERSATION_MEMORY_ENABLED` | Enable persistent multi-turn chat history across requests |
+| `CONVERSATION_MEMORY_ENABLED` | Enable persistent multi-turn chat history across requests (default `false`) |
 | `CONVERSATION_MEMORY_MAX_TURNS` | Maximum stored turns retained per identity |
 | `CONVERSATION_MEMORY_TTL_HOURS` | Expire stored turns after this many hours (`0` disables TTL) |
 | `CONVERSATION_MEMORY_CLEANUP_INTERVAL` | Run TTL cleanup every N chat requests (`0` disables opportunistic cleanup) |
@@ -220,8 +220,8 @@ curl -X POST http://localhost:5000/chat \
 | GET | `/` | Session | Web chat UI |
 | POST | `/chat` | Session or API key | Send a message, get a response |
 | POST | `/bug-report` | Session or API key | Submit a user bug report with optional debug context |
-| GET | `/health` | None | Service health check |
-| POST | `/cache/rebuild` | Session or API key | Rebuild the credit cache |
+| GET | `/health` | None | Service health check (returns JSON status and credit-cache readiness) |
+| POST | `/cache/rebuild` | Session or API key | Rebuild the credit cache from Radarr/Sonarr |
 | GET | `/notifications` | Session or API key | Poll for pending download notifications |
 | POST | `/webhooks/radarr` | None (if `WEBHOOK_SECRET` unset) / Webhook secret | Radarr download/health event webhook |
 | POST | `/webhooks/sonarr` | None (if `WEBHOOK_SECRET` unset) / Webhook secret | Sonarr download/health event webhook |
@@ -341,6 +341,7 @@ Media_bot/
   main.py            -- Flask server, routes, authentication, webhooks
   llm.py             -- LLM integration, tool schemas, handlers
   notifications.py   -- Download notification tracking and delivery
+  memory.py          -- Persistent conversation memory store and TTL pruning
   quota.py           -- Per-user daily download quota management
   plex_auth.py       -- Plex OAuth PIN-based authentication
   config.py          -- Environment variable loading and validation

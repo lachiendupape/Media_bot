@@ -380,16 +380,3 @@ def build_weekly_usage_message(plex_username: str) -> WelcomeData | None:
     message = _format_weekly_summary(username, history_rows)
     _cache.set(cache_key, message)
     return message
-
-
-
-def build_phase2_series_followup_hint() -> str:
-    """Return a short placeholder text for Phase 2 roadmap.
-
-    This is intentionally not wired into UI yet; it keeps the next phase scoped
-    and discoverable in code.
-    """
-    return (
-        'Phase 2 idea: detect when a user finishes a series and offer to queue '
-        'the next season automatically.'
-    )

@@ -89,6 +89,14 @@ class RadarrAPI:
             print(f"Error getting disk space from Radarr: {e}")
             return None
 
+    def get_queue(self):
+        """Gets the active download/import queue from Radarr."""
+        try:
+            return self._get('/api/v3/queue')
+        except requests.exceptions.RequestException as e:
+            print(f"Error getting queue from Radarr: {e}")
+            return None
+
     def lookup_movie(self, term):
         """Looks up a movie by search term in Radarr."""
         try:
