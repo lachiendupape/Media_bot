@@ -234,86 +234,6 @@ tools = [
     },
 ]
 
-# Speaking style definitions — maps style name to an LLM instruction string.
-SPEAKING_STYLES = {
-    "pirate": (
-        "You are a swashbuckling pirate. Respond using pirate speech: use 'Arr', 'matey', "
-        "'ye', 'aye', 'landlubber', 'shiver me timbers', 'ahoy', 'blimey', 'me hearties'. "
-        "Keep all factual information accurate but phrase everything as a pirate would."
-    ),
-    "robot": (
-        "You are a robot. Respond in mechanical, robotic language using formal clipped sentences. "
-        "Use phrases like 'AFFIRMATIVE', 'PROCESSING', 'QUERY ACCEPTED', 'EXECUTING', "
-        "'TASK COMPLETE', 'NEGATIVE', 'THIS UNIT', 'CALCULATING'. "
-        "Keep all factual information accurate."
-    ),
-    "sarcastic": (
-        "You are extremely sarcastic. Respond with dry humour, mock enthusiasm, and witty irony. "
-        "Use phrases like 'Oh wow, shocking', 'Because obviously', 'How surprising', "
-        "'What a surprise', 'I can't believe it'. Be passive-aggressive and sardonic. "
-        "Keep all factual information accurate but drip with sarcasm."
-    ),
-    "shakespearean": (
-        "You are a Shakespearean actor. Respond in Elizabethan English using 'thee', 'thou', "
-        "'hath', 'doth', 'prithee', 'forsooth', 'verily', 'art thou', 'wherefore', 'methinks', "
-        "'tis', 'hark', 'nay', 'yea'. Speak poetically and dramatically. "
-        "Keep all factual information accurate."
-    ),
-    "enthusiastic": (
-        "You are extremely enthusiastic and excited about everything! Use exclamation points "
-        "CONSTANTLY! Use ALL CAPS for emphasis! Add 'AMAZING!', 'FANTASTIC!', 'INCREDIBLE!', "
-        "'OH WOW!' frequently! Be over-the-top positive and energetic about everything! "
-        "Keep all factual information accurate."
-    ),
-}
-
-# Maps user-supplied keywords to a canonical style name.
-_STYLE_KEYWORDS: dict[str, str] = {
-    "pirate": "pirate",
-    "robot": "robot",
-    "robotic": "robot",
-    "sarcastic": "sarcastic",
-    "sarcasm": "sarcastic",
-    "shakespearean": "shakespearean",
-    "shakespeare": "shakespearean",
-    "elizabethan": "shakespearean",
-    "enthusiastic": "enthusiastic",
-    "excited": "enthusiastic",
-}
-
-# Pattern matching any known style keyword (escaped and joined for regex use).
-_STYLE_KEYWORD_PATTERN = "|".join(re.escape(word) for word in _STYLE_KEYWORDS)
-
-# Pre-compiled patterns used by _detect_style_command.
-_STYLE_RESET_PATTERNS = [
-    re.compile(r"\b(?:stop|disable|reset|turn\s+off)\s+(?:the\s+)?(?:\w+\s+)?(?:mode|style|voice)\b"),
-    re.compile(r"\b(?:normal|default|regular)\s+(?:mode|style|voice)\b"),
-    # Only treat "stop being ..." as a style reset when followed by a known style keyword.
-    re.compile(rf"\bstop\s+being\s+(?:so\s+)?(?:{_STYLE_KEYWORD_PATTERN})\b"),
-    re.compile(r"\breturn\s+to\s+normal\b"),
-    re.compile(r"\bno\s+more\s+styles?\b"),
-    # "stop talking/speaking in/like a robot voice" — specific speech verbs to avoid false positives;
-    # preposition (in/like) and article are each independently optional to handle all phrasings
-    re.compile(
-        rf"\bstop\s+(?:talk(?:ing)?|speak(?:ing)?|respond(?:ing)?|reply(?:ing)?|act(?:ing)?|communicat(?:e|ing)|sound(?:ing)?|us(?:e|ing)|writ(?:e|ing)|chat(?:ting)?)"
-        rf"\s+(?:(?:in|like)\s+)?(?:a\s+|the\s+|that\s+)?(?:{_STYLE_KEYWORD_PATTERN})\b"
-    ),
-    # "don't/don't talk/speak like a robot" — negation + specific speech verb + preposition + style keyword;
-    # accepts both ASCII apostrophe and curly apostrophe (U+2019) for mobile/autocorrect compatibility
-    re.compile(
-        rf"\b(?:don[\u2019']?t|do\s+not)\s+(?:talk|speak|respond|reply|act|communicate|sound|use|write|chat)"
-        rf"\s+(?:in|like)\s+(?:a\s+)?(?:{_STYLE_KEYWORD_PATTERN})\b"
-    ),
-]
-_STYLE_SET_PATTERNS = [
-    re.compile(r"\b(?:speak|talk|respond|reply|write|chat|act)\s+(?:like|as)\s+(?:a\s+)?(\w+)"),
-    re.compile(r"\b(?:be|become)\s+(?:a\s+)?(\w+)"),
-    re.compile(r"\b(\w+)\s+mode\b"),
-    re.compile(r"\buse\s+(\w+)\s+(?:mode|style|voice)\b"),
-    re.compile(r"\b(?:switch\s+to|enable)\s+(\w+)(?:\s+(?:mode|style|voice))?\b"),
-    re.compile(r"\b(\w+)\s+style\b"),
-]
-
 _KIDS_HINT_PATTERN = re.compile(
     r"\b(kids?|children|child|family|disney|pixar|animated|cartoon|young\s+kids?)\b",
     flags=re.IGNORECASE,
@@ -474,62 +394,6 @@ def _looks_like_kids_request(title: str, is_kids: bool | None = None) -> bool:
     """Infer kids routing when caller did not explicitly provide *is_kids*."""
     initial = _initial_kids_preference(title, is_kids)
     return bool(initial) if initial is not None else False
-
-def _detect_style_command(message: str) -> tuple[str | None, bool]:
-    """Detect if *message* is a speaking-style change command.
-
-    Returns ``(style_name, is_style_command)``.
-    *style_name* is ``None`` when the user wants to reset to normal.
-    *is_style_command* is ``True`` only when a style command was detected.
-    """
-    msg_lower = (message or "").lower().strip()
-
-    # Reset / normal commands take priority.
-    for pattern in _STYLE_RESET_PATTERNS:
-        if pattern.search(msg_lower):
-            return None, True
-
-    # Style-setting commands — extract the keyword and look it up.
-    for pattern in _STYLE_SET_PATTERNS:
-        m = pattern.search(msg_lower)
-        if m:
-            word = m.group(1).lower()
-            if word in _STYLE_KEYWORDS:
-                return _STYLE_KEYWORDS[word], True
-
-    return None, False
-
-
-def _apply_speaking_style(text: str, style: str) -> str:
-    """Restyle *text* through the LLM using the given speaking *style*.
-
-    Returns the original text unchanged if the LLM call fails or the style
-    is not recognised.
-    """
-    if not client or not text or style not in SPEAKING_STYLES:
-        return text
-    style_instruction = SPEAKING_STYLES[style]
-    try:
-        restyle_response = client.chat.completions.create(
-            model=config.OLLAMA_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"{style_instruction}\n"
-                        "Rewrite the following message in your style. "
-                        "Preserve ALL factual details, names, numbers, emoji, and list structure. "
-                        "Output only the restyled message — no preamble or commentary."
-                    ),
-                },
-                {"role": "user", "content": text},
-            ],
-        )
-        return restyle_response.choices[0].message.content or text
-    except Exception:
-        log.warning("Failed to apply speaking style '%s'", style)
-        return text
-
 
 def _check_disk_space():
     """Check available disk space via Radarr. Returns (ok, message).
@@ -1531,7 +1395,6 @@ def _capabilities_response() -> str:
         "5. Tell you who starred in or directed a specific movie or show in your library.",
         "6. Recommend movies or shows from your library that share cast or directors with something you already have.",
         "7. Delete movies or TV series if you’re the server owner.",
-        "8. Change how I reply with commands like 'pirate mode', 'robot style', or 'reset style'.",
         "",
         "A few handy examples:",
         "- Add the movie Sinners",
@@ -1542,7 +1405,6 @@ def _capabilities_response() -> str:
         "- Who starred in Severance?",
         "- Recommend something like Interstellar",
         "- Delete the movie Jaws 3",
-        "- Speak like a pirate",
         "",
         "Everything I do stays within your Plex-connected library and services.",
     ]
@@ -1754,41 +1616,16 @@ def chat_with_llm(
         'prior_turn_count_used': len(prepared_prior_turns),
     })
 
-    # Handle speaking-style commands before any other routing.
-    requested_style, is_style_cmd = _detect_style_command(user_message)
-    if is_style_cmd:
-        if state is not None:
-            state['speaking_style'] = requested_style
-        if requested_style:
-            style_name = requested_style.capitalize()
-            return (
-                f"🎭 Speaking style set to {style_name}! "
-                f"I'll respond in {style_name} style from now on. "
-                "Say \"reset style\" to return to normal."
-            )
-        return "✅ Speaking style reset to normal."
-
-    current_style = state.get('speaking_style') if state else None
-    if current_style not in SPEAKING_STYLES:
-        current_style = None
-        if state is not None:
-            state.pop('speaking_style', None)
-
     numeric_selection_result = _resolve_pending_numeric_selection(user_message, state=state, user_info=user_info)
     if numeric_selection_result is not None:
         telemetry['numeric_selection'] = True
-        if current_style:
-            return _apply_speaking_style(numeric_selection_result, current_style)
         return numeric_selection_result
 
     heuristic_result = _try_rule_based_route(user_message, state=state, telemetry=telemetry)
     if heuristic_result is not None:
-        if current_style:
-            return _apply_speaking_style(heuristic_result, current_style)
         return heuristic_result
 
-    # Build system prompt, appending style instructions when a style is active.
-    style_suffix = f"\nSTYLE INSTRUCTIONS: {SPEAKING_STYLES[current_style]}" if current_style else ""
+    # Build system prompt.
 
     messages = [
         {
@@ -1847,7 +1684,6 @@ def chat_with_llm(
                 "- When presenting multiple options (titles, seasons, people), use numbered lists (1., 2., 3., ...).\n"
                 "- When confirming an action, state it clearly (e.g., 'Adding Inception to movies...').\n"
                 "- Always respond in English only. Verify your response is in English before sending."
-                + style_suffix
             )
         },
     ]
@@ -1978,8 +1814,6 @@ def chat_with_llm(
             
             # Return the handler results directly - they're already human-readable
             final_result = "\n".join(results)
-            if current_style:
-                return _apply_speaking_style(final_result, current_style)
             return final_result
         else:
             telemetry['direct_response'] = True
