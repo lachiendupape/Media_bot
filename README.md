@@ -12,6 +12,7 @@ A natural-language media library assistant that lets you search and manage your 
 - **Recommendations** -- ask for movies or shows similar to a title in your library; the bot finds titles sharing cast or directors.
 - **Delete media (owner only)** -- the Plex server owner can remove movies or TV series (with file deletion) through the chat.
 - **Default media request profiles** -- applies configured Radarr/Sonarr roots, quality profiles, tags, and minimum availability automatically.
+- **Requester tagging (optional)** -- can add a sanitized requester username tag to new movie/TV requests for easier filtering in Radarr/Sonarr.
 - **Kids routing** -- routes kids movies and shows into dedicated root folders, with auto-classification from metadata and prompt-based confirmation when ambiguous.
 - **Download quotas** -- optional per-user daily download limits for movies and TV series, with per-user overrides and UTC midnight reset.
 - **Disk space guard** -- blocks new downloads when any disk drops below 5% free space.
@@ -115,6 +116,8 @@ At minimum you need to set:
 | `CONVERSATION_MEMORY_TTL_HOURS` | Expire stored turns after this many hours (`0` disables TTL) |
 | `CONVERSATION_MEMORY_CLEANUP_INTERVAL` | Run TTL cleanup every N chat requests (`0` disables opportunistic cleanup) |
 | `CONVERSATION_MEMORY_PURGE_ON_LOGOUT` | Delete browser-session conversation history when the user logs out |
+| `ENABLE_REQUESTER_TAGGING` | Set to `true` to add a per-request sanitized username tag to new requests |
+| `REQUESTER_TAG_PREFIX` | Optional prefix prepended to requester tags (for example `req-`) |
 
 Useful optional defaults for automated media adds:
 
@@ -122,6 +125,8 @@ Useful optional defaults for automated media adds:
 |----------|-------------|
 | `MEDIA_BOT_TAG` | Tag applied to all bot-created requests |
 | `KIDS_CONTENT_TAG` | Additional tag applied to kids requests |
+| `ENABLE_REQUESTER_TAGGING` | Enable adding a requester username tag for new requests |
+| `REQUESTER_TAG_PREFIX` | Optional prefix used for requester username tags |
 | `RADARR_MOVIE_ROOT` | Default Radarr movie root folder |
 | `RADARR_KIDS_MOVIE_ROOT` | Radarr root folder for kids movies |
 | `RADARR_DEFAULT_QUALITY_PROFILE` | Default Radarr quality profile name |

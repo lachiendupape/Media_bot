@@ -54,6 +54,8 @@ OWNER_PLEX_USERNAME = os.getenv("OWNER_PLEX_USERNAME", "")
 # Media request defaults
 MEDIA_BOT_TAG = os.getenv("MEDIA_BOT_TAG", "media-bot")
 KIDS_CONTENT_TAG = os.getenv("KIDS_CONTENT_TAG", "kids")
+ENABLE_REQUESTER_TAGGING = os.getenv("ENABLE_REQUESTER_TAGGING", "false").lower() in ("1", "true", "yes")
+REQUESTER_TAG_PREFIX = os.getenv("REQUESTER_TAG_PREFIX", "")
 
 # Radarr defaults
 RADARR_MOVIE_ROOT = os.getenv("RADARR_MOVIE_ROOT", "/movies")

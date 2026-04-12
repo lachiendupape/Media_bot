@@ -447,6 +447,31 @@ def _user_identity(user_info: dict | None) -> tuple[str, str]:
     return 'api_key', 'api_key'
 
 
+def _requester_tag_from_username(username: str | None) -> str | None:
+    """Build a safe requester tag from username when requester tagging is enabled."""
+    if not config.ENABLE_REQUESTER_TAGGING:
+        return None
+
+    if not username:
+        return None
+
+    cleaned_username = re.sub(r"\s+", "-", str(username).strip().lower())
+    cleaned_username = re.sub(r"[^a-z0-9._-]", "-", cleaned_username)
+    cleaned_username = re.sub(r"-+", "-", cleaned_username).strip("-._")
+    if not cleaned_username or cleaned_username in {"unknown", "api_key"}:
+        return None
+
+    cleaned_prefix = re.sub(r"\s+", "-", str(config.REQUESTER_TAG_PREFIX).strip().lower())
+    cleaned_prefix = re.sub(r"[^a-z0-9._-]", "-", cleaned_prefix)
+    cleaned_prefix = re.sub(r"-+", "-", cleaned_prefix).strip("-._")
+    if cleaned_prefix:
+        cleaned_prefix = f"{cleaned_prefix}-"
+
+    tag = f"{cleaned_prefix}{cleaned_username}"
+    tag = tag[:64].rstrip("-._")
+    return tag or None
+
+
 def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: bool, user_id: str, username: str) -> str:
     """Performs the actual Radarr API call to add a movie, choosing the root folder based on the kids flag."""
     preferred_root = config.RADARR_KIDS_MOVIE_ROOT if is_kids else config.RADARR_MOVIE_ROOT
@@ -461,6 +486,9 @@ def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: boo
     raw_tags = [config.MEDIA_BOT_TAG]
     if is_kids:
         raw_tags.append(config.KIDS_CONTENT_TAG)
+    requester_tag = _requester_tag_from_username(username)
+    if requester_tag:
+        raw_tags.append(requester_tag)
     tags = [t for t in raw_tags if t and str(t).strip()]
 
     result, error = radarr.add_movie(
@@ -677,6 +705,9 @@ def add_sonarr_series_handler(
     raw_tags = [config.MEDIA_BOT_TAG]
     if is_kids_request:
         raw_tags.append(config.KIDS_CONTENT_TAG)
+    requester_tag = _requester_tag_from_username(username)
+    if requester_tag:
+        raw_tags.append(requester_tag)
     tags = [t for t in raw_tags if t and str(t).strip()]
 
     result, error = sonarr.add_series(
