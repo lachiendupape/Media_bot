@@ -1442,8 +1442,49 @@ def _capabilities_response() -> str:
     return "\n".join(lines)
 
 
+def _strip_non_english_preamble(text: str) -> str:
+    """Strip leading paragraphs that are predominantly non-ASCII/non-English characters.
+
+    Some LLM models (e.g. qwen2.5) occasionally emit a foreign-language preamble
+    before the actual English response. This helper removes those leading segments
+    and also strips spurious language-tag artifacts of the form ``word English: …``
+    that precede the real content.
+    """
+    # Split into paragraphs on two or more consecutive newlines.
+    paragraphs = re.split(r'\n{2,}', text)
+    result: list[str] = []
+    found_english = False
+
+    for para in paragraphs:
+        if found_english:
+            result.append(para)
+            continue
+
+        content = para.strip()
+        if not content:
+            continue
+
+        non_ws = [c for c in content if not c.isspace()]
+        if not non_ws:
+            continue
+
+        non_ascii_ratio = sum(1 for c in non_ws if ord(c) > 127) / len(non_ws)
+        if non_ascii_ratio > 0.5:
+            # This paragraph is predominantly non-ASCII; treat it as a foreign-language
+            # preamble and discard it.
+            continue
+
+        # Strip a leading "WORD English:" language-tag artifact (e.g. "widaemsag English:").
+        content = re.sub(r'^\s*\S+\s+English:\s*', '', content, flags=re.IGNORECASE)
+
+        found_english = True
+        result.append(content)
+
+    return '\n\n'.join(result)
+
+
 def _sanitize_direct_response_text(text: str) -> tuple[str, bool]:
-    """Remove accidental JSON code blocks from user-facing direct responses."""
+    """Remove accidental JSON code blocks and non-English preambles from user-facing direct responses."""
     if not isinstance(text, str):
         return "", False
 
@@ -1452,6 +1493,8 @@ def _sanitize_direct_response_text(text: str) -> tuple[str, bool]:
     sanitized = re.sub(r"```json\s*.*?```", "", original, flags=re.IGNORECASE | re.DOTALL)
     # If the model used generic fences for JSON-like output, remove those too.
     sanitized = re.sub(r"```\s*\{\s*\"status\".*?```", "", sanitized, flags=re.IGNORECASE | re.DOTALL)
+    # Strip non-English preambles (e.g. Cyrillic/CJK paragraphs before the English response).
+    sanitized = _strip_non_english_preamble(sanitized)
     # Normalize blank lines after block removal.
     sanitized = re.sub(r"\n{3,}", "\n\n", sanitized).strip()
 
