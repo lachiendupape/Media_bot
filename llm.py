@@ -1442,6 +1442,13 @@ def _capabilities_response() -> str:
     return "\n".join(lines)
 
 
+# Fraction of non-whitespace characters that must be non-ASCII before a paragraph is
+# considered a foreign-language preamble and discarded.  0.5 is intentionally permissive:
+# legitimate English text with accented names (e.g. "François Truffaut") sits well below
+# this threshold, while purely Cyrillic or CJK paragraphs land at or above it.
+_NON_ENGLISH_PARA_THRESHOLD = 0.5
+
+
 def _strip_non_english_preamble(text: str) -> str:
     """Strip leading paragraphs that are predominantly non-ASCII/non-English characters.
 
@@ -1450,8 +1457,9 @@ def _strip_non_english_preamble(text: str) -> str:
     and also strips spurious language-tag artifacts of the form ``word English: …``
     that precede the real content.
     """
-    # Split into paragraphs on two or more consecutive newlines.
-    paragraphs = re.split(r'\n{2,}', text)
+    # Split on two or more consecutive newlines so that triple-newline gaps are also
+    # treated as paragraph boundaries (matching the '\n\n'.join reconstruction below).
+    paragraphs = re.split(r'\n\n+', text)
     result: list[str] = []
     found_english = False
 
@@ -1469,12 +1477,15 @@ def _strip_non_english_preamble(text: str) -> str:
             continue
 
         non_ascii_ratio = sum(1 for c in non_ws if ord(c) > 127) / len(non_ws)
-        if non_ascii_ratio > 0.5:
+        if non_ascii_ratio > _NON_ENGLISH_PARA_THRESHOLD:
             # This paragraph is predominantly non-ASCII; treat it as a foreign-language
             # preamble and discard it.
             continue
 
-        # Strip a leading "WORD English:" language-tag artifact (e.g. "widaemsag English:").
+        # Strip a leading language-tag artifact such as "widaemsag English:".
+        # The pattern matches an arbitrary non-whitespace token (the garbled word the
+        # model emits as a language marker) followed by the literal word "English:".
+        # We keep this intentionally broad so it catches whatever token the model uses.
         content = re.sub(r'^\s*\S+\s+English:\s*', '', content, flags=re.IGNORECASE)
 
         found_english = True
