@@ -155,9 +155,15 @@ def test_rule_based_route_handles_download_status_variants(monkeypatch):
 
     monkeypatch.setattr(llm, "check_download_status_handler", lambda: expected)
 
-    assert llm._try_rule_based_route("Download is complete") == expected
-    assert llm._try_rule_based_route("Queue finished downloading") == expected
-    assert llm._try_rule_based_route("The download status is ready") == expected
+    for message in (
+        "Download is complete",
+        "Queue is finished",
+        "Queue finished downloading",
+        "The download status is ready",
+    ):
+        telemetry = {}
+        assert llm._try_rule_based_route(message, telemetry=telemetry) == expected
+        assert telemetry["heuristic_route"] == "check_download_status"
 
 
 def test_rule_based_route_does_not_treat_add_download_request_as_status(monkeypatch):

@@ -1531,8 +1531,13 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
 
     # --- Download queue/status lookups ---
     download_status_patterns = (
-        re.compile(r'\b(?:download(?:ing)?|queue)\b.*\b(?:status|progress|done|ready|complete(?:d)?|finish(?:ed)?)\b'),
-        re.compile(r'\b(?:status|progress|done|ready|complete(?:d)?|finish(?:ed)?)\b.*\b(?:download(?:ing)?|queue)\b'),
+        re.compile(r'\bdownload(?:ing)?\s+(?:status|progress)\b'),
+        re.compile(r'\bqueue\s+status\b'),
+        re.compile(r'\b(?:status|progress)\s+of\s+(?:the\s+)?(?:download|queue)\b'),
+        re.compile(r'\bdownload\s+is\s+(?:done|ready|complete|completed|finished)\b'),
+        re.compile(r'\bqueue\s+is\s+(?:done|ready|complete|completed|finished)\b'),
+        re.compile(r'\b(?:done|ready|complete|completed|finished)\s+downloading\b'),
+        re.compile(r'\bwhen\b.*\b(?:complete|completed|finish|finished)\b.*\bdownload(?:ing)?\b'),
     )
     if any(pattern.search(normalized_casefold) for pattern in download_status_patterns):
         if telemetry is not None:
@@ -1540,9 +1545,9 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
         return check_download_status_handler()
 
     # --- Title credit lookups (who directed/starred in a specific title) ---
-    director_match = re.match(r'^who\s+directed\s+(.+)$', normalized_message, flags=re.IGNORECASE)
-    if director_match:
-        raw_phrase = director_match.group(1)
+    director_prefix = "who directed "
+    if normalized_casefold.startswith(director_prefix):
+        raw_phrase = normalized_message[len(director_prefix):].strip()
         title = _normalize_title_phrase(raw_phrase)
         if title:
             if telemetry is not None:
@@ -1550,15 +1555,17 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
             media_type = _infer_media_type_from_query(raw_phrase)
             return search_title_credits_handler(title, role='director', state=state, media_type=media_type)
 
-    actor_match = re.match(r'^who\s+(?:starred|stars|acted|acts|is)\s+in\s+(.+)$', normalized_message, flags=re.IGNORECASE)
-    if actor_match:
-        raw_phrase = actor_match.group(1)
-        title = _normalize_title_phrase(raw_phrase)
-        if title:
-            if telemetry is not None:
-                telemetry['heuristic_route'] = 'search_title_credits:actor'
-            media_type = _infer_media_type_from_query(raw_phrase)
-            return search_title_credits_handler(title, role='actor', state=state, media_type=media_type)
+    actor_prefixes = ("who starred in ", "who stars in ", "who acted in ", "who acts in ", "who is in ")
+    for prefix in actor_prefixes:
+        if normalized_casefold.startswith(prefix):
+            raw_phrase = normalized_message[len(prefix):].strip()
+            title = _normalize_title_phrase(raw_phrase)
+            if title:
+                if telemetry is not None:
+                    telemetry['heuristic_route'] = 'search_title_credits:actor'
+                media_type = _infer_media_type_from_query(raw_phrase)
+                return search_title_credits_handler(title, role='actor', state=state, media_type=media_type)
+            break
 
     # --- Person filmography lookups (what does X star in / list all Xs) ---
     # Use separate non-greedy patterns so the name doesn't swallow the trailing verb.
