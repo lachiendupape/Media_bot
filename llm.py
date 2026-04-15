@@ -1513,8 +1513,8 @@ def _sanitize_direct_response_text(text: str) -> tuple[str, bool]:
 
 
 def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
-    lowered = (user_message or '').strip()
-    lowered_casefold = lowered.lower()
+    normalized_message = (user_message or '').strip()
+    normalized_casefold = normalized_message.casefold()
 
     help_patterns = [
         re.compile(r'^help\??$', re.IGNORECASE),
@@ -1524,24 +1524,23 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
         re.compile(r'^(?:list|show)\s+(?:your\s+)?(?:features|capabilities|commands)\??$', re.IGNORECASE),
     ]
     for pattern in help_patterns:
-        if pattern.match(lowered):
+        if pattern.match(normalized_message):
             if telemetry is not None:
                 telemetry['heuristic_route'] = 'capabilities_help'
             return _capabilities_response()
 
     # --- Download queue/status lookups ---
-    download_terms = ("download", "downloading", "queue")
-    status_terms = ("status", "progress", "done", "ready", "complete", "completed", "finish", "finished", "error", "issue")
-    if (
-        any(term in lowered_casefold for term in download_terms)
-        and any(term in lowered_casefold for term in status_terms)
-    ):
+    download_status_patterns = (
+        re.compile(r'\b(?:download(?:ing)?|queue)\b.*\b(?:status|progress|done|ready|complete(?:d)?|finish(?:ed)?)\b'),
+        re.compile(r'\b(?:status|progress|done|ready|complete(?:d)?|finish(?:ed)?)\b.*\b(?:download(?:ing)?|queue)\b'),
+    )
+    if any(pattern.search(normalized_casefold) for pattern in download_status_patterns):
         if telemetry is not None:
             telemetry['heuristic_route'] = 'check_download_status'
         return check_download_status_handler()
 
     # --- Title credit lookups (who directed/starred in a specific title) ---
-    director_match = re.match(r'^who\s+directed\s+(.+)$', lowered, flags=re.IGNORECASE)
+    director_match = re.match(r'^who\s+directed\s+(.+)$', normalized_message, flags=re.IGNORECASE)
     if director_match:
         raw_phrase = director_match.group(1)
         title = _normalize_title_phrase(raw_phrase)
@@ -1551,7 +1550,7 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
             media_type = _infer_media_type_from_query(raw_phrase)
             return search_title_credits_handler(title, role='director', state=state, media_type=media_type)
 
-    actor_match = re.match(r'^who\s+(?:starred|stars|acted|acts|is)\s+in\s+(.+)$', lowered, flags=re.IGNORECASE)
+    actor_match = re.match(r'^who\s+(?:starred|stars|acted|acts|is)\s+in\s+(.+)$', normalized_message, flags=re.IGNORECASE)
     if actor_match:
         raw_phrase = actor_match.group(1)
         title = _normalize_title_phrase(raw_phrase)
@@ -1578,7 +1577,7 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
         (re.compile(r'^any\s+(.+?)\s+(?:(?:star(?:ring|ing)|staring)\s+)?in\s+(?:tv\s+series|(?:tv\s+)?shows?)\??$', re.IGNORECASE), 'tv', True),
     ]
     for pat, media_type, normalize_short_plural in _PERSON_PATTERNS:
-        pm = pat.match(lowered)
+        pm = pat.match(normalized_message)
         if pm:
             name = pm.group(1).strip(" '\u2019s").strip()
             if normalize_short_plural:
@@ -1593,7 +1592,7 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
                 return search_by_person_handler(name, media_type=media_type, role='actor', state=state)
 
     # --- Decade follow-up: "around in the 80s" / "in the 90s" when we have a recent person search ---
-    decade = _detect_decade(lowered)
+    decade = _detect_decade(normalized_message)
     if decade and state is not None:
         last = state.get('last_person_search')
         if last:
@@ -1644,14 +1643,14 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
         re.compile(r'^(?:any\s+)?suggestions?\s+(?:similar\s+to|like)\s+(.+?)\??$', re.IGNORECASE),
     ]
     for pat in _SIMILAR_PATTERNS:
-        sm = pat.match(lowered)
+        sm = pat.match(normalized_message)
         if sm:
             raw_phrase = sm.group(1)
             ref_title = _normalize_title_phrase(raw_phrase)
             if ref_title:
                 if telemetry is not None:
                     telemetry['heuristic_route'] = 'recommend_similar'
-                media_type = _infer_media_type_from_query(lowered)
+                media_type = _infer_media_type_from_query(normalized_message)
                 return recommend_similar_handler(ref_title, media_type=media_type, state=state)
 
     return None
