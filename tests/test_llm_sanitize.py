@@ -180,3 +180,15 @@ def test_rule_based_route_does_not_treat_add_download_request_as_status(monkeypa
     assert llm._try_rule_based_route("Queue this movie for me") is None
     assert llm._try_rule_based_route("Please add this to the download queue") is None
     assert called is False
+
+
+def test_rule_based_route_handles_title_plus_download_status_query(monkeypatch):
+    expected = "mocked download status"
+    telemetry = {}
+
+    monkeypatch.setattr(llm, "check_download_status_handler", lambda: expected)
+
+    result = llm._try_rule_based_route("Is Interstellar done downloading?", telemetry=telemetry)
+
+    assert result == expected
+    assert telemetry["heuristic_route"] == "check_download_status"

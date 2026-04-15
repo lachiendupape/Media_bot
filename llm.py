@@ -1447,6 +1447,16 @@ def _capabilities_response() -> str:
 # legitimate English text with accented names (e.g. "François Truffaut") sits well below
 # this threshold, while purely Cyrillic or CJK paragraphs land at or above it.
 _NON_ENGLISH_PARA_THRESHOLD = 0.5
+_DOWNLOAD_STATUS_PATTERNS = (
+    re.compile(r'\bdownload(?:ing)?\s+(?:status|progress)\b'),
+    re.compile(r'\bqueue\s+(?:status|progress)\b'),
+    re.compile(r'\b(?:status|progress)\s+of\s+(?:the\s+)?(?:download|queue)\b'),
+    re.compile(r'\b(?:download|queue)\s+is\s+(?:done|ready|complete|completed|finished)\b'),
+    re.compile(r'\b(?:done|ready|complete|completed|finished)\s+downloading\b'),
+)
+_DOWNLOAD_STATUS_WORD_PATTERN = re.compile(r'\b(?:status|progress|done|ready|complete|completed|finish|finished)\b')
+_DOWNLOAD_CONTEXT_WORD_PATTERN = re.compile(r'\b(?:download|downloading|queue)\b')
+_DOWNLOAD_QUESTION_WORD_PATTERN = re.compile(r'\b(?:is|are|when|what|how|has|have)\b')
 
 
 def _strip_non_english_preamble(text: str) -> str:
@@ -1514,7 +1524,7 @@ def _sanitize_direct_response_text(text: str) -> tuple[str, bool]:
 
 def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
     normalized_message = (user_message or '').strip()
-    normalized_casefold = normalized_message.casefold()
+    message_casefold = normalized_message.casefold()
 
     help_patterns = [
         re.compile(r'^help\??$', re.IGNORECASE),
@@ -1530,23 +1540,19 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
             return _capabilities_response()
 
     # --- Download queue/status lookups ---
-    download_status_patterns = (
-        re.compile(r'\bdownload(?:ing)?\s+(?:status|progress)\b'),
-        re.compile(r'\bqueue\s+status\b'),
-        re.compile(r'\b(?:status|progress)\s+of\s+(?:the\s+)?(?:download|queue)\b'),
-        re.compile(r'\bdownload\s+is\s+(?:done|ready|complete|completed|finished)\b'),
-        re.compile(r'\bqueue\s+is\s+(?:done|ready|complete|completed|finished)\b'),
-        re.compile(r'\b(?:done|ready|complete|completed|finished)\s+downloading\b'),
-        re.compile(r'\bwhen\b.*\b(?:complete|completed|finish|finished)\b.*\bdownload(?:ing)?\b'),
+    is_download_status_query = any(pattern.search(message_casefold) for pattern in _DOWNLOAD_STATUS_PATTERNS) or (
+        _DOWNLOAD_CONTEXT_WORD_PATTERN.search(message_casefold)
+        and _DOWNLOAD_STATUS_WORD_PATTERN.search(message_casefold)
+        and _DOWNLOAD_QUESTION_WORD_PATTERN.search(message_casefold)
     )
-    if any(pattern.search(normalized_casefold) for pattern in download_status_patterns):
+    if is_download_status_query:
         if telemetry is not None:
             telemetry['heuristic_route'] = 'check_download_status'
         return check_download_status_handler()
 
     # --- Title credit lookups (who directed/starred in a specific title) ---
     director_prefix = "who directed "
-    if normalized_casefold.startswith(director_prefix):
+    if message_casefold.startswith(director_prefix):
         raw_phrase = normalized_message[len(director_prefix):].strip()
         title = _normalize_title_phrase(raw_phrase)
         if title:
@@ -1557,7 +1563,7 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
 
     actor_prefixes = ("who starred in ", "who stars in ", "who acted in ", "who acts in ", "who is in ")
     for prefix in actor_prefixes:
-        if normalized_casefold.startswith(prefix):
+        if message_casefold.startswith(prefix):
             raw_phrase = normalized_message[len(prefix):].strip()
             title = _normalize_title_phrase(raw_phrase)
             if title:
