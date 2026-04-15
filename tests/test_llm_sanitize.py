@@ -133,3 +133,34 @@ def test_requester_tag_caps_length(monkeypatch):
 
     assert tag is not None
     assert len(tag) <= 64
+
+
+def test_rule_based_route_handles_vague_download_completion_query(monkeypatch):
+    expected = "mocked download status"
+    telemetry = {}
+
+    monkeypatch.setattr(llm, "check_download_status_handler", lambda: expected)
+
+    result = llm._try_rule_based_route(
+        "Can you tell me when it has completed downloading?",
+        telemetry=telemetry,
+    )
+
+    assert result == expected
+    assert telemetry["heuristic_route"] == "check_download_status"
+
+
+def test_rule_based_route_does_not_treat_add_download_request_as_status(monkeypatch):
+    called = False
+
+    def _handler():
+        nonlocal called
+        called = True
+        return "should not be called"
+
+    monkeypatch.setattr(llm, "check_download_status_handler", _handler)
+
+    result = llm._try_rule_based_route("Download Interstellar for me")
+
+    assert result is None
+    assert called is False

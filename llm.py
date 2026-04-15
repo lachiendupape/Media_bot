@@ -1514,6 +1514,7 @@ def _sanitize_direct_response_text(text: str) -> tuple[str, bool]:
 
 def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
     lowered = (user_message or '').strip()
+    lowered_casefold = lowered.lower()
 
     help_patterns = [
         re.compile(r'^help\??$', re.IGNORECASE),
@@ -1527,6 +1528,17 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
             if telemetry is not None:
                 telemetry['heuristic_route'] = 'capabilities_help'
             return _capabilities_response()
+
+    # --- Download queue/status lookups ---
+    download_terms = ("download", "downloading", "queue")
+    status_terms = ("status", "progress", "done", "ready", "complete", "completed", "finish", "finished", "error", "issue")
+    if (
+        any(term in lowered_casefold for term in download_terms)
+        and any(term in lowered_casefold for term in status_terms)
+    ):
+        if telemetry is not None:
+            telemetry['heuristic_route'] = 'check_download_status'
+        return check_download_status_handler()
 
     # --- Title credit lookups (who directed/starred in a specific title) ---
     director_match = re.match(r'^who\s+directed\s+(.+)$', lowered, flags=re.IGNORECASE)
