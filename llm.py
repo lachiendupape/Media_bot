@@ -1540,10 +1540,29 @@ def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict
             return _capabilities_response()
 
     # --- Download queue/status lookups ---
-    is_download_status_query = any(pattern.search(message_casefold) for pattern in _DOWNLOAD_STATUS_PATTERNS) or (
+    matches_explicit_download_status = any(
+        pattern.search(message_casefold) for pattern in _DOWNLOAD_STATUS_PATTERNS
+    )
+    has_download_status_terms = (
         _DOWNLOAD_CONTEXT_WORD_PATTERN.search(message_casefold)
         and _DOWNLOAD_STATUS_WORD_PATTERN.search(message_casefold)
         and _DOWNLOAD_QUESTION_WORD_PATTERN.search(message_casefold)
+    )
+    has_question_structure = (
+        normalized_message.endswith('?')
+        or re.match(
+            r'^\s*(?:when|what|where|which|who|why|how|is|are|do|does|did|can|could|would|will|has|have)\b',
+            message_casefold,
+        )
+    )
+    starts_with_imperative_download = re.match(
+        r'^\s*(?:download|add|queue)\b',
+        message_casefold,
+    )
+    is_download_status_query = matches_explicit_download_status or (
+        has_download_status_terms
+        and has_question_structure
+        and not starts_with_imperative_download
     )
     if is_download_status_query:
         if telemetry is not None:
