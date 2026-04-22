@@ -1,0 +1,7 @@
+cat > ~/.config/chezmoi/age/key.txt <<'EOF'
+age18dddngy4euryz69js7ea3geaplpcmtyy8xs0qv8dxstfxaw26d2swf7ens
+EOF
+chmod 600 ~/.config/chezmoi/age/key.txt
+chezmoi init https://github.com/lachiendupape/dotfiles.git
+chezmoi apply -D ~/Git
+ls -la ~/Git/Media_bot/.env
