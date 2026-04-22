@@ -203,7 +203,8 @@ def _build_github_issue_payload(report, debug_context):
         ])
     
     last_chat = debug_context.get('last_chat') or {}
-    if last_chat and (last_chat.get('user_message') or last_chat.get('response_text')):
+    include_chat_context = bool(config.GITHUB_ISSUES_INCLUDE_CHAT_CONTEXT)
+    if include_chat_context and last_chat and (last_chat.get('user_message') or last_chat.get('response_text')):
         lines.append("")
         lines.append("## Context")
         if last_chat.get('user_message'):
@@ -230,11 +231,18 @@ def _build_github_issue_payload(report, debug_context):
     
     telemetry = (last_chat.get('telemetry') or {})
     if telemetry:
+        telemetry_subset = {
+            'model': telemetry.get('model'),
+            'tool_calls': telemetry.get('tool_calls', []),
+            'llm_duration_ms': telemetry.get('llm_duration_ms'),
+            'fallback_tool_parser': telemetry.get('fallback_tool_parser', False),
+            'prior_turn_count_used': telemetry.get('prior_turn_count_used', 0),
+        }
         lines.extend([
             "",
             "## Telemetry",
             "```json",
-            json.dumps(redact_sensitive_fields(telemetry), indent=2, ensure_ascii=True),
+            json.dumps(redact_sensitive_fields(telemetry_subset), indent=2, ensure_ascii=True),
             "```",
         ])
     
@@ -531,7 +539,7 @@ def bug_report():
     description = (data.get('description') or '').strip()
     expected = (data.get('expected') or '').strip()
     request_id = (data.get('request_id') or '').strip()
-    include_debug_context = bool(data.get('include_debug_context', True))
+    include_debug_context = bool(data.get('include_debug_context', False))
     create_github_issue = bool(data.get('create_github_issue', False))
 
     if not description:

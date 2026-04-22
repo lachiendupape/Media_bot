@@ -47,6 +47,7 @@ GITHUB_ISSUES_REPO = os.getenv("GITHUB_ISSUES_REPO", "")
 GITHUB_ISSUE_LABELS = [label.strip() for label in os.getenv("GITHUB_ISSUE_LABELS", "bug,reported-from-app").split(",") if label.strip()]
 
 GITHUB_ISSUES_ENABLED = bool(GITHUB_ISSUES_TOKEN and GITHUB_ISSUES_REPO and "/" in GITHUB_ISSUES_REPO)
+GITHUB_ISSUES_INCLUDE_CHAT_CONTEXT = os.getenv("GITHUB_ISSUES_INCLUDE_CHAT_CONTEXT", "false").lower() in ("1", "true", "yes")
 
 # Owner account — only this Plex username may delete media
 OWNER_PLEX_USERNAME = os.getenv("OWNER_PLEX_USERNAME", "")
@@ -83,6 +84,12 @@ DAILY_TV_SERIES_QUOTA = int(os.getenv("DAILY_TV_SERIES_QUOTA", os.getenv("DAILY_
 
 # Webhook auth — optional shared secret for Radarr/Sonarr webhook endpoints
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
+_FLASK_ENV = os.getenv("FLASK_ENV", "development").strip().lower()
+if _FLASK_ENV == "production" and not WEBHOOK_SECRET:
+    raise RuntimeError(
+        "WEBHOOK_SECRET must be set when FLASK_ENV=production. "
+        "This prevents unsigned public webhook requests."
+    )
 
 # Conversation memory (Phase 1 rollout)
 CONVERSATION_MEMORY_ENABLED = os.getenv("CONVERSATION_MEMORY_ENABLED", "false").lower() in ("1", "true", "yes")
