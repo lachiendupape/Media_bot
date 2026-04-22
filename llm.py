@@ -3,10 +3,12 @@ import logging
 import re
 import threading
 import time
+import requests
 from openai import OpenAI
 from api.radarr import RadarrAPI, credit_cache
 from api.sonarr import SonarrAPI
 import config
+import notifications
 import quota
 from observability import redact_sensitive_fields, start_span
 
@@ -38,6 +40,10 @@ tools = [
                     "title": {
                         "type": "string",
                         "description": "The title of the movie to search for and add."
+                    },
+                    "is_kids": {
+                        "type": "boolean",
+                        "description": "Set true when this should be added to kids media folders."
                     }
                 },
                 "required": ["title"]
@@ -59,6 +65,10 @@ tools = [
                     "season": {
                         "type": "integer",
                         "description": "The season number to add. Omit to see available seasons."
+                    },
+                    "is_kids": {
+                        "type": "boolean",
+                        "description": "Set true when this should be added to kids media folders."
                     }
                 },
                 "required": ["title"]
@@ -154,13 +164,21 @@ tools = [
         "type": "function",
         "function": {
             "name": "delete_tv_series",
-            "description": "Removes a TV series from the Sonarr library. Only the server owner may call this.",
+            "description": (
+                "Removes a TV series or a specific season of a TV series from the Sonarr library. "
+                "If a season number is provided, only that season is unmonitored and its files are deleted. "
+                "If no season is given, the entire series is removed. Only the server owner may call this."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "title": {
                         "type": "string",
                         "description": "The title of the TV series to delete."
+                    },
+                    "season": {
+                        "type": "integer",
+                        "description": "The season number to delete. Omit to delete the entire series."
                     },
                     "delete_files": {
                         "type": "boolean",
@@ -197,8 +215,185 @@ tools = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_download_status",
+            "description": (
+                "Checks the current download queue in Radarr and Sonarr to show the status of "
+                "in-progress downloads, including percentage complete, estimated time remaining, "
+                "and any errors or warnings. Use when the user asks about download progress, "
+                "whether something is ready, or if there are download issues."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
 ]
 
+_KIDS_HINT_PATTERN = re.compile(
+    r"\b(kids?|children|child|family|disney|pixar|animated|cartoon|young\s+kids?)\b",
+    flags=re.IGNORECASE,
+)
+_ADULT_HINT_PATTERN = re.compile(
+    r"\b(adults?|grown\s*ups?|mature|18\+|not\s+for\s+kids|for\s+adults?)\b",
+    flags=re.IGNORECASE,
+)
+
+_KIDS_CERTIFICATIONS = {
+    "G",
+    "TVY",
+    "TVY7",
+    "TVG",
+    "U",
+    "PG",
+    "TVPG",
+}
+_ADULT_CERTIFICATIONS = {
+    "R",
+    "NC17",
+    "TV14",
+    "TVMA",
+    "MA15+",
+    "R18+",
+    "X",
+}
+
+_OMDB_SESSION = requests.Session()
+_OMDB_CACHE: dict[tuple[str, str, str], bool | None] = {}
+_OMDB_CACHE_LOCK = threading.Lock()
+
+
+def _initial_kids_preference(title: str, is_kids: bool | None = None) -> bool | None:
+    """Return an explicit/heuristic preference from user input only."""
+    if is_kids is not None:
+        return bool(is_kids)
+    text = title or ""
+    if _KIDS_HINT_PATTERN.search(text):
+        return True
+    if _ADULT_HINT_PATTERN.search(text):
+        return False
+    return None
+
+
+def _normalize_certification(value: str) -> str:
+    cert = (value or "").upper().strip()
+    cert = cert.replace("US:", "").replace("TV-", "TV").replace(" ", "")
+    cert = cert.replace("_", "")
+    return cert
+
+
+def _extract_certification_from_item(item: dict) -> str:
+    if not item:
+        return ""
+    for key in ("certification", "contentRating", "rating", "rated", "mpaaRating"):
+        val = item.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    ratings = item.get("ratings") or item.get("certifications")
+    if isinstance(ratings, list):
+        for rating in ratings:
+            if isinstance(rating, dict):
+                for key in ("value", "rating", "name", "certification"):
+                    val = rating.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val
+    return ""
+
+
+def _is_family_animation(item: dict) -> bool:
+    genres = item.get("genres") or []
+    normalized = set()
+    for g in genres:
+        if isinstance(g, str):
+            normalized.add(g.strip().lower())
+        elif isinstance(g, dict):
+            name = g.get("name")
+            if isinstance(name, str):
+                normalized.add(name.strip().lower())
+    return bool(
+        normalized.intersection({"family", "children", "animation", "kids", "cartoon"})
+    )
+
+
+def _classify_from_metadata(item: dict) -> bool | None:
+    cert = _normalize_certification(_extract_certification_from_item(item))
+    if cert:
+        if cert in _KIDS_CERTIFICATIONS:
+            return True
+        if cert in _ADULT_CERTIFICATIONS:
+            return False
+    if _is_family_animation(item):
+        return True
+    return None
+
+
+def _classify_from_omdb(title: str, year: int | None, media_type: str) -> bool | None:
+    """Best-effort OMDb classification; returns None when unavailable/ambiguous."""
+    api_key = (config.OMDB_API_KEY or "").strip()
+    if not config.AUTO_CLASSIFY_KIDS_ENABLED or not api_key or not title:
+        return None
+
+    lookup_type = "series" if media_type == "series" else "movie"
+    cache_key = (title.strip().lower(), str(year or ""), lookup_type)
+    with _OMDB_CACHE_LOCK:
+        if cache_key in _OMDB_CACHE:
+            return _OMDB_CACHE[cache_key]
+
+    params = {
+        "apikey": api_key,
+        "t": title,
+        "type": lookup_type,
+    }
+    if year:
+        params["y"] = str(year)
+
+    result: bool | None = None
+    try:
+        response = _OMDB_SESSION.get("https://www.omdbapi.com/", params=params, timeout=config.OMDB_TIMEOUT_SECONDS)
+        response.raise_for_status()
+        payload = response.json()
+        if str(payload.get("Response", "")).lower() == "true":
+            cert = _normalize_certification(payload.get("Rated", ""))
+            if cert in _KIDS_CERTIFICATIONS:
+                result = True
+            elif cert in _ADULT_CERTIFICATIONS:
+                result = False
+            elif _is_family_animation({"genres": (payload.get("Genre") or "").split(",")}):
+                result = True
+    except Exception:
+        # Best-effort only: keep behavior stable when OMDb is unavailable.
+        result = None
+
+    with _OMDB_CACHE_LOCK:
+        _OMDB_CACHE[cache_key] = result
+    return result
+
+
+def _resolve_kids_classification(
+    title: str,
+    user_preference: bool | None,
+    item: dict,
+    media_type: str,
+) -> bool | None:
+    """Resolve kids routing from explicit preference -> metadata -> OMDb."""
+    if user_preference is not None:
+        return user_preference
+
+    meta_decision = _classify_from_metadata(item)
+    if meta_decision is not None:
+        return meta_decision
+
+    return _classify_from_omdb(title, item.get("year"), media_type)
+
+
+def _looks_like_kids_request(title: str, is_kids: bool | None = None) -> bool:
+    """Infer kids routing when caller did not explicitly provide *is_kids*."""
+    initial = _initial_kids_preference(title, is_kids)
+    return bool(initial) if initial is not None else False
 
 def _check_disk_space():
     """Check available disk space via Radarr. Returns (ok, message).
@@ -252,12 +447,76 @@ def _user_identity(user_info: dict | None) -> tuple[str, str]:
     return 'api_key', 'api_key'
 
 
+def _requester_tag_from_username(username: str | None) -> str | None:
+    """Build a safe requester tag from username when requester tagging is enabled."""
+    if not config.ENABLE_REQUESTER_TAGGING:
+        return None
+
+    if not username:
+        return None
+
+    cleaned_username = re.sub(r"\s+", "-", str(username).strip().lower())
+    cleaned_username = re.sub(r"[^a-z0-9._-]", "-", cleaned_username)
+    cleaned_username = re.sub(r"-+", "-", cleaned_username).strip("-._")
+    if not cleaned_username or cleaned_username in {"unknown", "api_key"}:
+        return None
+
+    cleaned_prefix = re.sub(r"\s+", "-", str(config.REQUESTER_TAG_PREFIX).strip().lower())
+    cleaned_prefix = re.sub(r"[^a-z0-9._-]", "-", cleaned_prefix)
+    cleaned_prefix = re.sub(r"-+", "-", cleaned_prefix).strip("-._")
+    if cleaned_prefix:
+        cleaned_prefix = f"{cleaned_prefix}-"
+
+    tag = f"{cleaned_prefix}{cleaned_username}"
+    tag = tag[:64].rstrip("-._")
+    return tag or None
+
+
+def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: bool, user_id: str, username: str) -> str:
+    """Performs the actual Radarr API call to add a movie, choosing the root folder based on the kids flag."""
+    preferred_root = config.RADARR_KIDS_MOVIE_ROOT if is_kids else config.RADARR_MOVIE_ROOT
+    root_folder = radarr.get_root_folder_by_path(preferred_root)
+    if not root_folder:
+        return "Failed to retrieve Radarr root folder."
+
+    quality_profile = radarr.get_quality_profile_by_name(config.RADARR_DEFAULT_QUALITY_PROFILE)
+    if not quality_profile:
+        return "Failed to retrieve Radarr quality profiles."
+
+    raw_tags = [config.MEDIA_BOT_TAG]
+    if is_kids:
+        raw_tags.append(config.KIDS_CONTENT_TAG)
+    requester_tag = _requester_tag_from_username(username)
+    if requester_tag:
+        raw_tags.append(requester_tag)
+    tags = [t for t in raw_tags if t and str(t).strip()]
+
+    result, error = radarr.add_movie(
+        selected_movie,
+        root_folder['path'],
+        quality_profile['id'],
+        minimum_availability=config.RADARR_MINIMUM_AVAILABILITY,
+        tags=tags,
+    )
+    if result:
+        quota.record_download(user_id, username, "movie", selected_movie['title'])
+        try:
+            notifications.record_pending_download(user_id, username, selected_movie['title'], "movie")
+        except Exception:
+            log.warning("Failed to record pending download notification for movie")
+        return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
+    if error == 'already_exists':
+        return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
+    return f"Failed to add movie '{selected_movie['title']}': {error}"
+
+
 def add_radarr_movie_handler(
     title: str,
     state: dict = None,
     preferred_tmdb_id: int = None,
     preferred_year: int = None,
     user_info: dict = None,
+    is_kids: bool | None = None,
 ) -> str:
     ok, msg = _check_disk_space()
     if not ok:
@@ -268,6 +527,7 @@ def add_radarr_movie_handler(
     if not allowed:
         return quota_msg
 
+    initial_kids_preference = _initial_kids_preference(title, is_kids)
     radarr = RadarrAPI()
     movies = radarr.lookup_movie(title)
     if not movies:
@@ -285,6 +545,7 @@ def add_radarr_movie_handler(
             state.pop('pending_series_pick', None)
             state['pending_movie_add'] = {
                 'query': title,
+                'is_kids': initial_kids_preference,
                 'options': [
                     {
                         'title': m.get('title', '?'),
@@ -302,22 +563,29 @@ def add_radarr_movie_handler(
 
     if selected_movie is None:
         selected_movie = movies[0]
-    root_folder = radarr.get_root_folder()
-    if not root_folder:
-        return "Failed to retrieve Radarr root folder."
 
-    quality_profiles = radarr.get_quality_profiles()
-    if not quality_profiles:
-        return "Failed to retrieve Radarr quality profiles."
+    resolved_kids = _resolve_kids_classification(
+        title=selected_movie.get('title', title),
+        user_preference=initial_kids_preference,
+        item=selected_movie,
+        media_type='movie',
+    )
 
-    quality_profile_id = quality_profiles[0]['id']
-    result, error = radarr.add_movie(selected_movie, root_folder['path'], quality_profile_id)
-    if result:
-        quota.record_download(user_id, username, "movie", selected_movie['title'])
-        return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
-    if error == 'already_exists':
-        return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
-    return f"Failed to add movie '{selected_movie['title']}': {error}"
+    if resolved_kids is None and config.RADARR_KIDS_MOVIE_ROOT and state is not None:
+        # state is required for multi-turn conversation; stateless API calls skip the prompt
+        state['pending_kids_check'] = {
+            'kind': 'movie',
+            'query': title,
+            'tmdbId': selected_movie.get('tmdbId'),
+            'year': selected_movie.get('year'),
+        }
+        return (
+            f"One quick question before I add '{selected_movie['title']} ({selected_movie.get('year', '')})' — "
+            "is this a kids film or for adults? Reply with **kids** or **adults**."
+        )
+
+    final_kids = bool(resolved_kids) if resolved_kids is not None else False
+    return _do_add_radarr_movie(radarr, selected_movie, is_kids=final_kids, user_id=user_id, username=username)
 
 def add_sonarr_series_handler(
     title: str,
@@ -326,16 +594,18 @@ def add_sonarr_series_handler(
     preferred_tvdb_id: int = None,
     preferred_year: int = None,
     user_info: dict = None,
+    is_kids: bool | None = None,
 ) -> str:
     ok, msg = _check_disk_space()
     if not ok:
         return msg
 
     user_id, username = _user_identity(user_info)
-    allowed, quota_msg = quota.check_quota(user_id, username, "tv_season")
+    allowed, quota_msg = quota.check_quota(user_id, username, "tv_series")
     if not allowed:
         return quota_msg
 
+    initial_kids_preference = _initial_kids_preference(title, is_kids)
     sonarr = SonarrAPI()
     series = sonarr.lookup_series(title)
     if not series:
@@ -353,6 +623,7 @@ def add_sonarr_series_handler(
             state.pop('pending_movie_add', None)
             state['pending_series_pick'] = {
                 'query': title,
+                'is_kids': initial_kids_preference,
                 'options': [
                     {
                         'title': s.get('title', '?'),
@@ -371,6 +642,28 @@ def add_sonarr_series_handler(
     if selected_series is None:
         selected_series = series[0]
 
+    resolved_kids = _resolve_kids_classification(
+        title=selected_series.get('title', title),
+        user_preference=initial_kids_preference,
+        item=selected_series,
+        media_type='series',
+    )
+
+    if resolved_kids is None and config.SONARR_KIDS_TV_ROOT and state is not None:
+        state['pending_kids_check'] = {
+            'kind': 'series',
+            'query': title,
+            'tvdbId': selected_series.get('tvdbId'),
+            'year': selected_series.get('year'),
+            'season': season,
+        }
+        return (
+            f"One quick question before I add '{selected_series['title']} ({selected_series.get('year', '')})' — "
+            "should this go to **kids TV** or **adults TV**? Reply with **kids** or **adults**."
+        )
+
+    is_kids_request = bool(resolved_kids) if resolved_kids is not None else False
+
     seasons = [s for s in selected_series.get('seasons', []) if s['seasonNumber'] > 0]
 
     # No season specified — list available seasons and ask
@@ -382,6 +675,7 @@ def add_sonarr_series_handler(
                 'title': selected_series.get('title', title),
                 'year': selected_series.get('year'),
                 'tvdbId': selected_series.get('tvdbId'),
+                'is_kids': is_kids_request,
                 'available_seasons': sorted(s['seasonNumber'] for s in seasons),
             }
         season_list = ", ".join(str(s['seasonNumber']) for s in seasons)
@@ -399,19 +693,38 @@ def add_sonarr_series_handler(
     if state is not None:
         state.pop('pending_series_add', None)
 
-    root_folder = sonarr.get_root_folder()
+    preferred_root = config.SONARR_KIDS_TV_ROOT if is_kids_request else config.SONARR_TV_ROOT
+    root_folder = sonarr.get_root_folder_by_path(preferred_root)
     if not root_folder:
         return "Failed to retrieve Sonarr root folder."
 
-    quality_profiles = sonarr.get_quality_profiles()
-    if not quality_profiles:
+    quality_profile = sonarr.get_quality_profile_by_name(config.SONARR_DEFAULT_QUALITY_PROFILE)
+    if not quality_profile:
         return "Failed to retrieve Sonarr quality profiles."
 
-    quality_profile_id = quality_profiles[0]['id']
-    result, error = sonarr.add_series(selected_series, root_folder['path'], quality_profile_id, season_number=season)
+    raw_tags = [config.MEDIA_BOT_TAG]
+    if is_kids_request:
+        raw_tags.append(config.KIDS_CONTENT_TAG)
+    requester_tag = _requester_tag_from_username(username)
+    if requester_tag:
+        raw_tags.append(requester_tag)
+    tags = [t for t in raw_tags if t and str(t).strip()]
+
+    result, error = sonarr.add_series(
+        selected_series,
+        root_folder['path'],
+        quality_profile['id'],
+        season_number=season,
+        series_type=config.SONARR_SERIES_TYPE,
+        tags=tags,
+    )
 
     if result:
-        quota.record_download(user_id, username, "tv_season", f"{selected_series['title']} S{season:02d}")
+        quota.record_download(user_id, username, "tv_series", selected_series['title'])
+        try:
+            notifications.record_pending_download(user_id, username, selected_series['title'], "tv_season")
+        except Exception:
+            log.warning("Failed to record pending download notification for series")
         return f"Great news! '{selected_series['title']}' Season {season} has been grabbed and is downloading now — it'll be with you shortly!"
     if error == 'already_exists':
         # Series exists in library — check if the requested season is already monitored
@@ -430,7 +743,11 @@ def add_sonarr_series_handler(
             updated, update_error = sonarr.update_series(existing['id'], existing)
             if updated:
                 sonarr.search_season(existing['id'], season)
-                quota.record_download(user_id, username, "tv_season", f"{existing['title']} S{season:02d}")
+                quota.record_download(user_id, username, "tv_series", existing['title'])
+                try:
+                    notifications.record_pending_download(user_id, username, existing['title'], "tv_season")
+                except Exception:
+                    log.warning("Failed to record pending download notification for series")
                 return (
                     f"Great news! '{existing['title']}' Season {season} has been grabbed "
                     f"and is downloading now — it'll be with you shortly!"
@@ -438,6 +755,98 @@ def add_sonarr_series_handler(
             return f"Failed to update '{selected_series['title']}': {update_error}"
         return f"'{selected_series['title']} ({selected_series.get('year', '')})' is already in your library — no need to add it again!"
     return f"Failed to add TV series '{selected_series['title']}': {error}"
+
+def check_download_status_handler() -> str:
+    """Query the Radarr and Sonarr download queues and return a formatted status summary."""
+    radarr = RadarrAPI()
+    sonarr = SonarrAPI()
+
+    lines = []
+
+    # --- Movies (Radarr) ---
+    try:
+        movie_queue = radarr.get_queue()
+    except Exception as e:
+        movie_queue = None
+        lines.append(f"⚠️ Could not reach Radarr: {e}")
+
+    if movie_queue is None:
+        # Treat a None queue as an error condition rather than as an empty queue.
+        # If no specific Radarr warning has been added yet, add a generic one.
+        if not any("Radarr" in line for line in lines):
+            lines.append("⚠️ Could not reach Radarr (queue unavailable)")
+        movie_records = []
+    else:
+        movie_records = movie_queue.get('records', [])
+    for item in movie_records:
+        movie = item.get('movie') or {}
+        title = movie.get('title') or item.get('title', 'Unknown')
+        year = movie.get('year', '')
+        label = f"{title} ({year})" if year else title
+
+        size = item.get('size', 0)
+        sizeleft = item.get('sizeleft', 0)
+        progress = round((size - sizeleft) / size * 100) if size > 0 and size >= sizeleft else None
+        timeleft = item.get('timeleft', '')
+        status = item.get('status', 'unknown')
+        tracked = item.get('trackedDownloadStatus', 'ok')
+        status_msgs = [sm.get('title', '') for sm in item.get('statusMessages', []) if sm.get('title')]
+
+        if tracked in ('warning', 'error'):
+            icon = '⚠️' if tracked == 'warning' else '❌'
+            detail = ', '.join(status_msgs) if status_msgs else tracked
+            lines.append(f"  {icon} 🎬 {label} — {detail}")
+        elif status in ('completed', 'importPending', 'importing', 'imported'):
+            lines.append(f"  ✅ 🎬 {label} — ready to import")
+        elif timeleft and progress is not None and progress < 100:
+            lines.append(f"  ⏬ 🎬 {label} — {progress}% (~{timeleft} remaining)")
+        else:
+            lines.append(f"  ⏬ 🎬 {label} — {status}")
+
+    # --- TV Series (Sonarr) ---
+    try:
+        tv_queue = sonarr.get_queue()
+    except Exception as e:
+        tv_queue = None
+        lines.append(f"⚠️ Could not reach Sonarr: {e}")
+
+    if tv_queue is None:
+        tv_records = []
+    else:
+        tv_records = tv_queue.get('records', [])
+
+    for item in tv_records:
+        series = item.get('series') or {}
+        episode = item.get('episode') or {}
+        title = series.get('title', 'Unknown')
+        season = episode.get('seasonNumber')
+        ep_num = episode.get('episodeNumber')
+        ep_info = f" S{season:02d}E{ep_num:02d}" if season is not None and ep_num is not None else ""
+
+        size = item.get('size', 0)
+        sizeleft = item.get('sizeleft', 0)
+        progress = round((size - sizeleft) / size * 100) if size > 0 and size >= sizeleft else None
+        timeleft = item.get('timeleft', '')
+        status = item.get('status', 'unknown')
+        tracked = item.get('trackedDownloadStatus', 'ok')
+        status_msgs = [sm.get('title', '') for sm in item.get('statusMessages', []) if sm.get('title')]
+
+        if tracked in ('warning', 'error'):
+            icon = '⚠️' if tracked == 'warning' else '❌'
+            detail = ', '.join(status_msgs) if status_msgs else tracked
+            lines.append(f"  {icon} 📺 {title}{ep_info} — {detail}")
+        elif status in ('completed', 'importPending', 'importing', 'imported'):
+            lines.append(f"  ✅ 📺 {title}{ep_info} — ready to import")
+        elif timeleft and progress is not None and progress < 100:
+            lines.append(f"  ⏬ 📺 {title}{ep_info} — {progress}% (~{timeleft} remaining)")
+        else:
+            lines.append(f"  ⏬ 📺 {title}{ep_info} — {status}")
+
+    if not lines:
+        return "✅ No active downloads — your queue is empty."
+
+    return "📥 Current downloads:\n\n" + "\n".join(lines)
+
 
 def _format_person_results(results: list, display_name: str) -> str:
     """Format a flat list of person credit results under a single display name."""
@@ -453,6 +862,7 @@ def _format_person_results(results: list, display_name: str) -> str:
         credit_part = f" {credit_info}" if credit_info else ""
         lines.append(f"{base}{credit_part} [{status}]")
     return "\n".join(lines)
+
 
 
 def search_by_person_handler(person_name: str, media_type: str = None, role: str = None, state: dict = None) -> str:
@@ -611,6 +1021,28 @@ def _format_title_credits_results(results, title: str = None, role: str = None, 
     return "\n".join(lines).strip()
 
 
+def _extract_number_from_message(text: str) -> int | None:
+    """Extract a leading integer from a user message, ignoring trailing words like 'please'.
+
+    The word-boundary assertion ensures strings like '1abc' do not match; only digits
+    followed by whitespace, punctuation, or end-of-string are accepted.
+    """
+    m = re.match(r'^(\d+)\b', text.strip())
+    return int(m.group(1)) if m else None
+
+
+def _extract_season_from_message(text: str) -> int | None:
+    """Extract a season number from a user message.
+
+    Accepts forms like: '1', 'season 1', 'season 1 please', '1 please'.
+    """
+    m = re.search(r'\bseason\s*(\d+)\b', text.strip(), flags=re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    # Fall back to a bare leading number (e.g. "1 please")
+    return _extract_number_from_message(text)
+
+
 def _resolve_pending_numeric_selection(user_message: str, state: dict = None, user_info: dict = None) -> str | None:
     """Resolve numeric follow-ups for pending title disambiguation and series season selection."""
     if state is None:
@@ -620,44 +1052,91 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
 
     # Pending movie disambiguation for add_radarr_movie flow.
     pending_movie = state.get('pending_movie_add')
-    if pending_movie and trimmed.isdigit():
-        index = int(trimmed)
-        options = pending_movie.get('options', [])
-        if index < 1 or index > len(options):
-            return f"Please choose a number between 1 and {len(options)}."
-        picked = options[index - 1]
-        state.pop('pending_movie_add', None)
+    if pending_movie:
+        index = _extract_number_from_message(trimmed)
+        if index is not None:
+            options = pending_movie.get('options', [])
+            if index < 1 or index > len(options):
+                return f"Please choose a number between 1 and {len(options)}."
+            picked = options[index - 1]
+            state.pop('pending_movie_add', None)
+            return add_radarr_movie_handler(
+                pending_movie.get('query', picked.get('title', '')),
+                state=state,
+                preferred_tmdb_id=picked.get('tmdbId'),
+                preferred_year=picked.get('year'),
+                user_info=user_info,
+                is_kids=pending_movie.get('is_kids'),
+            )
+
+    # Pending kids/adults check for add_radarr_movie flow.
+    pending_kids = state.get('pending_kids_check')
+    if pending_kids:
+        lower = trimmed.lower()
+        has_kids = re.search(r'\bkids?\b', lower) is not None
+        has_adults = re.search(r'\badults?\b', lower) is not None
+        # Treat explicit negation like "not kids" / "no kids" as an adults preference.
+        negated_kids = re.search(r'\b(?:no|not)\s+kids?\b', lower) is not None
+
+        if has_kids and has_adults:
+            # Both keywords mentioned — ambiguous; ask again.
+            if pending_kids.get('kind') == 'series':
+                return "Your reply mentioned both **kids** and **adults**. Please reply with only **kids** or only **adults** to confirm if this show should go to kids TV or adults TV."
+            return "Your reply mentioned both **kids** and **adults**. Please reply with only **kids** or only **adults** to confirm the movie category."
+        elif negated_kids and not has_adults:
+            is_kids = False
+        elif has_adults and not has_kids:
+            is_kids = False
+        elif has_kids and not has_adults:
+            is_kids = True
+        else:
+            if pending_kids.get('kind') == 'series':
+                return "Please reply with **kids** or **adults** to confirm if this show should go to kids TV or adults TV."
+            return "Please reply with **kids** or **adults** to confirm the movie category."
+        state.pop('pending_kids_check', None)
+        if pending_kids.get('kind') == 'series':
+            return add_sonarr_series_handler(
+                pending_kids.get('query', ''),
+                season=pending_kids.get('season'),
+                state=state,
+                preferred_tvdb_id=pending_kids.get('tvdbId'),
+                preferred_year=pending_kids.get('year'),
+                user_info=user_info,
+                is_kids=is_kids,
+            )
         return add_radarr_movie_handler(
-            pending_movie.get('query', picked.get('title', '')),
+            pending_kids.get('query', ''),
             state=state,
-            preferred_tmdb_id=picked.get('tmdbId'),
-            preferred_year=picked.get('year'),
+            preferred_tmdb_id=pending_kids.get('tmdbId'),
+            preferred_year=pending_kids.get('year'),
             user_info=user_info,
+            is_kids=is_kids,
         )
 
     # Pending series disambiguation for add_sonarr_series flow.
     pending_series_pick = state.get('pending_series_pick')
-    if pending_series_pick and trimmed.isdigit():
-        index = int(trimmed)
-        options = pending_series_pick.get('options', [])
-        if index < 1 or index > len(options):
-            return f"Please choose a number between 1 and {len(options)}."
-        picked = options[index - 1]
-        state.pop('pending_series_pick', None)
-        return add_sonarr_series_handler(
-            pending_series_pick.get('query', picked.get('title', '')),
-            state=state,
-            preferred_tvdb_id=picked.get('tvdbId'),
-            preferred_year=picked.get('year'),
-            user_info=user_info,
-        )
+    if pending_series_pick:
+        index = _extract_number_from_message(trimmed)
+        if index is not None:
+            options = pending_series_pick.get('options', [])
+            if index < 1 or index > len(options):
+                return f"Please choose a number between 1 and {len(options)}."
+            picked = options[index - 1]
+            state.pop('pending_series_pick', None)
+            return add_sonarr_series_handler(
+                pending_series_pick.get('query', picked.get('title', '')),
+                state=state,
+                preferred_tvdb_id=picked.get('tvdbId'),
+                preferred_year=picked.get('year'),
+                user_info=user_info,
+                is_kids=pending_series_pick.get('is_kids'),
+            )
 
     # Pending season selection for add_sonarr_series flow.
     pending_series = state.get('pending_series_add')
     if pending_series:
-        m = re.match(r'^(?:season\s*)?(\d+)$', trimmed, flags=re.IGNORECASE)
-        if m:
-            season = int(m.group(1))
+        season = _extract_season_from_message(trimmed)
+        if season is not None:
             available = pending_series.get('available_seasons', [])
             if available and season not in available:
                 return (
@@ -671,15 +1150,15 @@ def _resolve_pending_numeric_selection(user_message: str, state: dict = None, us
                 preferred_tvdb_id=pending_series.get('tvdbId'),
                 preferred_year=pending_series.get('year'),
                 user_info=user_info,
+                is_kids=pending_series.get('is_kids'),
             )
 
     pending = state.get('pending_title_lookup')
     if not pending:
         return None
-    if not trimmed.isdigit():
+    index = _extract_number_from_message(trimmed)
+    if index is None:
         return None
-
-    index = int(trimmed)
     options = pending.get('options', [])
     if index < 1 or index > len(options):
         return f"Please choose a number between 1 and {len(options)}."
@@ -732,7 +1211,7 @@ def delete_movie_handler(title: str, delete_files: bool = True, user_info: dict 
     return f"Failed to delete '{movie['title']}'. Please check Radarr."
 
 
-def delete_tv_series_handler(title: str, delete_files: bool = True, user_info: dict = None) -> str:
+def delete_tv_series_handler(title: str, season: int = None, delete_files: bool = True, user_info: dict = None) -> str:
     if not _is_owner(user_info):
         return "❌ Sorry, only the server owner can delete media."
 
@@ -748,6 +1227,47 @@ def delete_tv_series_handler(title: str, delete_files: bool = True, user_info: d
         return f"Multiple series found matching '{title}': {titles}. Please be more specific."
 
     series = matches[0]
+
+    # Season-specific deletion: unmonitor the season and optionally delete its files
+    if season is not None:
+        all_seasons = series.get('seasons', [])
+        real_seasons = [s for s in all_seasons if s['seasonNumber'] > 0]
+        season_exists = any(s['seasonNumber'] == season for s in real_seasons)
+        if not season_exists:
+            valid = sorted(s['seasonNumber'] for s in real_seasons)
+            return (
+                f"Season {season} doesn't exist for '{series['title']}'. "
+                f"Available seasons: {', '.join(str(n) for n in valid)}."
+            )
+
+        unmonitored = sonarr.unmonitor_season(series['id'], season)
+        if not unmonitored:
+            return f"Failed to unmonitor Season {season} of '{series['title']}'. Please check Sonarr."
+
+        files_deleted = False
+        if delete_files:
+            episode_files = sonarr.get_episode_files(series['id'], season_number=season)
+            if episode_files is None:
+                # API error fetching files
+                files_deleted = False
+            elif not episode_files:
+                # No files on disk — nothing to delete, treat as success
+                files_deleted = True
+            else:
+                file_ids = [f['id'] for f in episode_files]
+                files_deleted = sonarr.delete_episode_files_bulk(file_ids)
+
+        if delete_files and not files_deleted:
+            return (
+                f"✅ Season {season} of '{series['title']}' has been unmonitored, "
+                f"but its files could not be deleted. Please check Sonarr."
+            )
+        return (
+            f"✅ Season {season} of '{series['title']}' has been unmonitored and "
+            f"{'its files deleted from disk' if delete_files else 'kept on disk'}."
+        )
+
+    # Full series deletion
     success = sonarr.delete_series(series['id'], delete_files=delete_files)
     if success:
         return f"✅ '{series['title']} ({series.get('year', '')})' has been removed from your library."
@@ -894,8 +1414,119 @@ def _normalize_short_plural_person_name(text: str) -> str:
     return cleaned[:-1]
 
 
+def _capabilities_response() -> str:
+    """Return a stable help message covering tested chat capabilities."""
+    lines = [
+        "Here’s what I can help with right now:",
+        "",
+        "1. Add a movie by title.",
+        "2. Add a TV series and let you choose which season to grab.",
+        "3. Send kids movies and kids TV to separate library folders when that’s what you want.",
+        "4. Search your library by actor or director.",
+        "5. Tell you who starred in or directed a specific movie or show in your library.",
+        "6. Recommend movies or shows from your library that share cast or directors with something you already have.",
+        "7. Delete movies or TV series if you’re the server owner.",
+        "",
+        "A few handy examples:",
+        "- Add the movie Sinners",
+        "- Add the show Adolescence",
+        "- Add Bluey for kids",
+        "- What movies do I have with Tom Hanks?",
+        "- Who directed Goodfellas?",
+        "- Who starred in Severance?",
+        "- Recommend something like Interstellar",
+        "- Delete the movie Jaws 3",
+        "",
+        "Everything I do stays within your Plex-connected library and services.",
+    ]
+    return "\n".join(lines)
+
+
+# Fraction of non-whitespace characters that must be non-ASCII before a paragraph is
+# considered a foreign-language preamble and discarded.  0.5 is intentionally permissive:
+# legitimate English text with accented names (e.g. "François Truffaut") sits well below
+# this threshold, while purely Cyrillic or CJK paragraphs land at or above it.
+_NON_ENGLISH_PARA_THRESHOLD = 0.5
+
+
+def _strip_non_english_preamble(text: str) -> str:
+    """Strip leading paragraphs that are predominantly non-ASCII/non-English characters.
+
+    Some LLM models (e.g. qwen2.5) occasionally emit a foreign-language preamble
+    before the actual English response. This helper removes those leading segments
+    and also strips spurious language-tag artifacts of the form ``word English: …``
+    that precede the real content.
+    """
+    # Split on two or more consecutive newlines so that triple-newline gaps are also
+    # treated as paragraph boundaries (matching the '\n\n'.join reconstruction below).
+    paragraphs = re.split(r'\n\n+', text)
+    result: list[str] = []
+    found_english = False
+
+    for para in paragraphs:
+        if found_english:
+            result.append(para)
+            continue
+
+        content = para.strip()
+        if not content:
+            continue
+
+        non_ws = [c for c in content if not c.isspace()]
+        if not non_ws:
+            continue
+
+        non_ascii_ratio = sum(1 for c in non_ws if ord(c) > 127) / len(non_ws)
+        if non_ascii_ratio > _NON_ENGLISH_PARA_THRESHOLD:
+            # This paragraph is predominantly non-ASCII; treat it as a foreign-language
+            # preamble and discard it.
+            continue
+
+        # Strip a leading language-tag artifact such as "widaemsag English:".
+        # The pattern matches an arbitrary non-whitespace token (the garbled word the
+        # model emits as a language marker) followed by the literal word "English:".
+        # We keep this intentionally broad so it catches whatever token the model uses.
+        content = re.sub(r'^\s*\S+\s+English:\s*', '', content, flags=re.IGNORECASE)
+
+        found_english = True
+        result.append(content)
+
+    return '\n\n'.join(result)
+
+
+def _sanitize_direct_response_text(text: str) -> tuple[str, bool]:
+    """Remove accidental JSON code blocks and non-English preambles from user-facing direct responses."""
+    if not isinstance(text, str):
+        return "", False
+
+    original = text
+    # Strip fenced JSON blocks that sometimes leak from model reasoning/tool-like output.
+    sanitized = re.sub(r"```json\s*.*?```", "", original, flags=re.IGNORECASE | re.DOTALL)
+    # If the model used generic fences for JSON-like output, remove those too.
+    sanitized = re.sub(r"```\s*\{\s*\"status\".*?```", "", sanitized, flags=re.IGNORECASE | re.DOTALL)
+    # Strip non-English preambles (e.g. Cyrillic/CJK paragraphs before the English response).
+    sanitized = _strip_non_english_preamble(sanitized)
+    # Normalize blank lines after block removal.
+    sanitized = re.sub(r"\n{3,}", "\n\n", sanitized).strip()
+
+    return sanitized or original, sanitized != original
+
+
 def _try_rule_based_route(user_message: str, state: dict = None, telemetry: dict = None) -> str | None:
     lowered = (user_message or '').strip()
+
+    help_patterns = [
+        re.compile(r'^help\??$', re.IGNORECASE),
+        re.compile(r'^what\s+can\s+you\s+do\??$', re.IGNORECASE),
+        re.compile(r'^what\s+do\s+you\s+do\??$', re.IGNORECASE),
+        re.compile(r'^show\s+help\??$', re.IGNORECASE),
+        re.compile(r'^(?:list|show)\s+(?:your\s+)?(?:features|capabilities|commands)\??$', re.IGNORECASE),
+    ]
+    for pattern in help_patterns:
+        if pattern.match(lowered):
+            if telemetry is not None:
+                telemetry['heuristic_route'] = 'capabilities_help'
+            return _capabilities_response()
 
     # --- Title credit lookups (who directed/starred in a specific title) ---
     director_match = re.match(r'^who\s+directed\s+(.+)$', lowered, flags=re.IGNORECASE)
@@ -1020,10 +1651,45 @@ def chat_with_llm(
     state: dict = None,
     request_id: str = None,
     telemetry: dict = None,
+    prior_turns: list = None,
 ) -> str:
-    """Send a user message to the NeMo Claw model and handle tool calls."""
+    """Send a user message to the NeMo Claw model and handle tool calls.
+    
+    Args:
+        user_message: The current user's message
+        user_info: User information dict (contains plex_user if session-authenticated)
+        state: Mutable workflow state dict for tracking pending selections/tasks
+        request_id: Request correlation ID for observability
+        telemetry: Mutable dict for capturing metrics (llm_duration_ms, tool_calls, etc.)
+        prior_turns: List of prior conversation turns (dicts with role/content keys)
+    """
     if not client:
         return "AI Client is not initialized."
+
+    def _prepare_prior_turn_messages(turns: list | None) -> list[dict]:
+        if not turns:
+            return []
+
+        prepared_turns = []
+        for turn in turns:
+            if not isinstance(turn, dict):
+                continue
+
+            role = turn.get("role")
+            content = turn.get("content")
+            if role not in {"user", "assistant"}:
+                continue
+            if not isinstance(content, str) or not content.strip():
+                continue
+
+            prepared_turns.append({"role": role, "content": content})
+
+        if config.CONVERSATION_MEMORY_MAX_TURNS > 0:
+            prepared_turns = prepared_turns[-config.CONVERSATION_MEMORY_MAX_TURNS :]
+
+        return prepared_turns
+
+    prepared_prior_turns = _prepare_prior_turn_messages(prior_turns)
 
     telemetry = telemetry if telemetry is not None else {}
     telemetry.update({
@@ -1032,6 +1698,7 @@ def chat_with_llm(
         'tool_calls': [],
         'numeric_selection': False,
         'request_id': request_id,
+        'prior_turn_count_used': len(prepared_prior_turns),
     })
 
     numeric_selection_result = _resolve_pending_numeric_selection(user_message, state=state, user_info=user_info)
@@ -1043,49 +1710,74 @@ def chat_with_llm(
     if heuristic_result is not None:
         return heuristic_result
 
+    # Build system prompt.
+
     messages = [
         {
             "role": "system",
             "content": (
+                "LANGUAGE REQUIREMENT: Always respond exclusively in English. Never respond in other "
+                "languages. If unsure, default to English and provide clear, direct answers.\n\n"
                 "You are a media library assistant. You can add movies (via Radarr), add TV series "
                 "(via Sonarr), search the library by actor/actress or director name, look up who "
-                "starred in or directed a given movie/TV title, and delete movies or TV series "
-                "(owner only).\n"
-                "RULES:\n"
-                "- When the user asks to ADD a MOVIE, call add_radarr_movie.\n"
-                "- When the user asks to ADD a TV SERIES or TV SHOW, call add_sonarr_series. "
-                "If the user specifies a season number, include it. If they don't specify a season, "
-                "call it WITHOUT the season parameter first to see available seasons, then tell the "
-                "user which seasons are available and ask them which one they'd like.\n"
-                "- When the user replies with a season number for a show you already looked up, "
-                "call add_sonarr_series again WITH the season parameter.\n"
-                "- When the user asks what movies or shows star a particular ACTOR or ACTRESS, "
-                "IMMEDIATELY call search_by_person with role='actor' — even if the name is partial "
-                "or ambiguous. NEVER ask for clarification first; the tool handles partial names "
-                "automatically and will group results by full name if needed. "
-                "Set media_type='movie' for movies only, 'tv' for TV only, or omit for both. "
-                "For generic phrasing like 'what has X starred in', omit media_type so both are returned.\n"
-                "- When the user asks what movies or shows a DIRECTOR directed, IMMEDIATELY call "
-                "search_by_person with role='director' — even for partial names. Never ask for "
-                "clarification before calling the tool.\n"
-                "- If the user asks to 'list all' people with a given name, call search_by_person "
-                "with that name — the tool will show all matching people grouped by full name.\n"
-                "- When the user asks WHO STARRED IN, WHO ACTS IN, WHO IS IN, or WHO DIRECTED a "
-                "specific movie or TV title, call search_title_credits with title set to that title. "
-                "Set role='actor' for cast questions and role='director' for director questions.\n"
-                "- If you ask the user to choose between multiple title matches, and they reply with "
-                "just a number (like 1, 2, or 3), treat that as their selection.\n"
-                "- When the user asks to DELETE or REMOVE a MOVIE, call delete_movie.\n"
-                "- When the user asks to DELETE or REMOVE a TV SERIES or TV SHOW, call delete_tv_series.\n"
-                "- When the user asks for movies or shows SIMILAR TO, LIKE, or RECOMMENDATIONS based on "
-                "a specific title, IMMEDIATELY call recommend_similar with the reference title. "
+                "starred in or directed a given movie/TV title, delete movies or TV series "
+                "(owner only), and check download progress.\n\n"
+                "KIDS/ADULTS CLASSIFICATION RULES:\n"
+                "- When the user says FOR KIDS, FOR CHILDREN, FOR FAMILY, or implies kids content → set is_kids=true.\n"
+                "- When the user says FOR ADULTS, MATURE, or implies adult content → set is_kids=false.\n"
+                "- When unclear: if the title is known to be kid-friendly (animations, family films) → is_kids=true; "
+                "if known to be adult-oriented → is_kids=false; if completely ambiguous → omit the parameter and "
+                "the system will auto-classify, then prompt the user to confirm their preference (KIDS or ADULTS).\n"
+                "- CRITICAL: Never guess. If the user's intent is ambiguous, always omit is_kids and let the system "
+                "classification + user confirmation handle it. The confirmation prompt is safe and correct.\n\n"
+                "- Media defaults (such as availability, quality profiles, and series type) are enforced "
+                "automatically according to server configuration; do not assume or describe them as fixed values.\n"
+                "- If per-user daily limits are enabled, they are enforced automatically according to server "
+                "configuration. You may mention that limits exist, but do not state specific numbers unless "
+                "explicitly provided in the conversation.\n\n"
+                "TOOL ROUTING RULES (priority order — execute the first matching rule):\n"
+                "1. ADD MOVIE: User says ADD/GET/ADD TO LIBRARY with a MOVIE title → call add_radarr_movie immediately.\n"
+                "2. ADD TV SERIES: User says ADD/GET/ADD TO LIBRARY with a TV/SHOW/SERIES title → call add_sonarr_series. "
+                "If season specified, include it. If NOT specified, call WITHOUT season first (shows available seasons), "
+                "then ask user which season they want.\n"
+                "3. SEASON SELECTION: User replies with just a season number (1, 2, 3, etc.) after you showed available seasons "
+                "→ call add_sonarr_series again WITH the season parameter.\n"
+                "4. SEARCH BY PERSON (ACTOR): User asks 'who starred in', 'what with', 'movies/shows with [NAME]' "
+                "→ call search_by_person with role='actor' IMMEDIATELY. Never ask for clarification first; the tool handles "
+                "partial names automatically and will group results by full name if needed. "
+                "Set media_type='movie' for movies only, 'tv' for TV only, or omit for both.\n"
+                "5. SEARCH BY PERSON (DIRECTOR): User asks 'who directed', 'what [DIRECTOR] directed' "
+                "→ call search_by_person with role='director' IMMEDIATELY. Never ask for clarification first.\n"
+                "6. LIST ALL PEOPLE: User asks to 'list all' people with a given name → call search_by_person "
+                "with that name; the tool will show all matching people grouped by full name.\n"
+                "7. SEARCH TITLE CREDITS: User asks 'WHO STARRED IN [TITLE]', 'WHO DIRECTED [TITLE]', 'CAST OF [TITLE]' "
+                "→ call search_title_credits with title set to that title. Set role='actor' for cast, role='director' for directors.\n"
+                "8. NUMERIC SELECTION: User replies with a single digit (1, 2, 3) when you've offered multiple matches "
+                "→ treat as selection of that option.\n"
+                "9. DELETE MOVIE: User says DELETE/REMOVE with a MOVIE title → call delete_movie.\n"
+                "10. DELETE TV SERIES: User says DELETE/REMOVE with a TV/SERIES/SEASON title → call delete_tv_series. "
+                "Include the season number in the 'season' parameter when a specific season is mentioned "
+                "(e.g., 'delete Lost season 2'). NEVER call add_sonarr_series for a delete/remove request.\n"
+                "11. RECOMMENDATIONS: User asks 'LIKE [TITLE]', 'SIMILAR TO [TITLE]', or 'RECOMMEND' based on a title "
+                "→ call recommend_similar with the reference title. "
                 "Set media_type='movie' for movie-only requests, 'tv' for TV-only, or omit for both.\n"
-                "- For general questions, respond directly without calling any tools.\n"
-                "- Be concise."
+                "12. DOWNLOAD STATUS: User asks 'IS IT READY', 'IS IT DONE', 'DOWNLOAD STATUS', 'DOWNLOAD PROGRESS', "
+                "or about download ISSUES or ERRORS → call check_download_status.\n"
+                "13. GENERAL QUESTIONS: Any other question → respond directly WITHOUT calling tools.\n\n"
+                "RESPONSE FORMAT:\n"
+                "- Keep responses brief and direct. No unnecessary explanations.\n"
+                "- When presenting multiple options (titles, seasons, people), use numbered lists (1., 2., 3., ...).\n"
+                "- When confirming an action, state it clearly (e.g., 'Adding Inception to movies...').\n"
+                "- Always respond in English only. Verify your response is in English before sending."
             )
         },
-        {"role": "user", "content": user_message}
     ]
+    
+    # Inject sanitized bounded conversation history before the current message.
+    messages.extend(prepared_prior_turns)
+    
+    # Add current user message
+    messages.append({"role": "user", "content": user_message})
 
     try:
         llm_started = time.perf_counter()
@@ -1128,13 +1820,19 @@ def chat_with_llm(
                 
                 with start_span('llm.tool_execution', {'tool.name': function_name}):
                     if function_name == "add_radarr_movie":
-                        result = add_radarr_movie_handler(arguments.get("title"), state=state, user_info=user_info)
+                        result = add_radarr_movie_handler(
+                            arguments.get("title"),
+                            state=state,
+                            user_info=user_info,
+                            is_kids=arguments.get("is_kids"),
+                        )
                     elif function_name == "add_sonarr_series":
                         result = add_sonarr_series_handler(
                             arguments.get("title"),
                             season=arguments.get("season"),
                             state=state,
                             user_info=user_info,
+                            is_kids=arguments.get("is_kids"),
                         )
                     elif function_name == "search_by_person":
                         requested_media_type = arguments.get("media_type")
@@ -1167,6 +1865,7 @@ def chat_with_llm(
                     elif function_name == "delete_tv_series":
                         result = delete_tv_series_handler(
                             arguments.get("title"),
+                            season=arguments.get("season"),
                             delete_files=arguments.get("delete_files", True),
                             user_info=user_info,
                         )
@@ -1176,6 +1875,8 @@ def chat_with_llm(
                             media_type=arguments.get("media_type"),
                             state=state,
                         )
+                    elif function_name == "check_download_status":
+                        result = check_download_status_handler()
                     else:
                         result = f"Unknown function: {function_name}"
 
@@ -1197,12 +1898,14 @@ def chat_with_llm(
                 results.append(result)
             
             # Return the handler results directly - they're already human-readable
-            return "\n".join(results)
+            final_result = "\n".join(results)
+            return final_result
         else:
             telemetry['direct_response'] = True
-            return response_message.content
+            safe_response, changed = _sanitize_direct_response_text(response_message.content)
+            telemetry['direct_response_sanitized'] = changed
+            return safe_response
 
     except Exception:
         log.exception("Error in chat_with_llm", extra={'request_id': request_id})
         return "Something went wrong while processing your request. Please try again."
-

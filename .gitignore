@@ -37,9 +37,14 @@ env.bak
 # Temp test files
 _*.py
 _*.txt
+_*.json
 
 # SQLite cache
+*.db
 credit_cache.db
+quotas.db
+notifications.db
+memory.db
 
 # Sensitive / non-code files
 *.csv

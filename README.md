@@ -11,10 +11,15 @@ A natural-language media library assistant that lets you search and manage your 
 - **Reverse title lookup** -- ask who starred in or directed a specific movie/TV title in your library.
 - **Recommendations** -- ask for movies or shows similar to a title in your library; the bot finds titles sharing cast or directors.
 - **Delete media (owner only)** -- the Plex server owner can remove movies or TV series (with file deletion) through the chat.
-- **Download quotas** -- optional per-user daily download limits for movies and TV seasons, with per-user overrides and UTC midnight reset.
+- **Default media request profiles** -- applies configured Radarr/Sonarr roots, quality profiles, tags, and minimum availability automatically.
+- **Requester tagging (optional)** -- can add a sanitized requester username tag to new movie/TV requests for easier filtering in Radarr/Sonarr.
+- **Kids routing** -- routes kids movies and shows into dedicated root folders, with auto-classification from metadata and prompt-based confirmation when ambiguous.
+- **Download quotas** -- optional per-user daily download limits for movies and TV series, with per-user overrides and UTC midnight reset.
 - **Disk space guard** -- blocks new downloads when any disk drops below 5% free space.
 - **User bug reports** -- the chat UI can send issue reports with request IDs and optional debug context.
 - **GitHub issue creation** -- bug reports can optionally create a GitHub issue when a repo and token are configured.
+- **Download notifications** -- tracks who requested each download and delivers completion or failure notifications via in-chat banners and a polling endpoint. Radarr/Sonarr webhooks route events back to the requesting user.
+- **Speaking styles** -- change how the bot responds with commands like "speak like a pirate", "robot mode", or "reset style". Supported styles: pirate, robot, sarcastic, shakespearean, enthusiastic.
 - **Structured observability** -- JSON logs, request correlation IDs, optional Sentry errors, and optional OpenTelemetry traces.
 - **Plex OAuth login** -- browser-based sign-in using your Plex account; only users with access to your server can use the bot.
 - **API key access** -- programmatic access via `X-Api-Key` header for scripts and automation.
@@ -82,6 +87,15 @@ At minimum you need to set:
 | `PLEX_TOKEN` | Optional Plex token used for TV cast lookups |
 | `PLEX_MACHINE_ID` | Plex server machine identifier |
 | `PLEX_CLIENT_ID` | A random UUID for this app |
+| `TAUTULLI_URL` | Tautulli base URL used for usage analytics |
+| `TAUTULLI_API_KEY` | Tautulli API key |
+| `TAUTULLI_WELCOME_ENABLED` | Enable personalized weekly usage text in welcome message (default `false`) |
+| `TAUTULLI_WELCOME_DAYS` | Lookback window in days for usage summary metrics |
+| `TAUTULLI_WELCOME_TOP_SHOWS` | Number of top watched shows to include |
+| `TAUTULLI_WELCOME_CACHE_SECONDS` | Cache TTL for per-user usage summary lookups |
+| `TAUTULLI_PHASE2_ENABLED` | Enable Phase 2A season completion suggestions in welcome text |
+| `TAUTULLI_PHASE2_MIN_COMPLETION_RATIO` | Fraction of a season watched before suggesting next season |
+| `TAUTULLI_PHASE2_MAX_SUGGESTIONS` | Maximum number of next-season suggestions to include |
 | `OWNER_PLEX_USERNAME` | Plex username of the server owner (for delete permissions) |
 | `OLLAMA_BASE_URL` | Ollama API URL (default `http://127.0.0.1:11434`, set automatically in Docker) |
 | `OLLAMA_MODEL` | Default Ollama model name when not overridden by compose |
@@ -93,9 +107,37 @@ At minimum you need to set:
 | `GITHUB_ISSUES_REPO` | Optional GitHub repo for issue creation, in `owner/repo` format |
 | `GITHUB_ISSUES_TOKEN` | Optional GitHub token with permission to create issues |
 | `GITHUB_ISSUE_LABELS` | Optional comma-separated labels for created issues |
+| `WEBHOOK_SECRET` | Shared secret for Radarr/Sonarr webhook endpoints |
 | `QUOTA_ENABLED` | Set to `true` to enforce per-user daily download limits |
 | `DAILY_MOVIE_QUOTA` | Max movie downloads per user per day (0 = unlimited) |
-| `DAILY_TV_SEASON_QUOTA` | Max TV season downloads per user per day (0 = unlimited) |
+| `DAILY_TV_SERIES_QUOTA` | Max TV series downloads per user per day (0 = unlimited) |
+| `CONVERSATION_MEMORY_ENABLED` | Enable persistent multi-turn chat history across requests (default `false`) |
+| `CONVERSATION_MEMORY_MAX_TURNS` | Maximum stored turns retained per identity |
+| `CONVERSATION_MEMORY_TTL_HOURS` | Expire stored turns after this many hours (`0` disables TTL) |
+| `CONVERSATION_MEMORY_CLEANUP_INTERVAL` | Run TTL cleanup every N chat requests (`0` disables opportunistic cleanup) |
+| `CONVERSATION_MEMORY_PURGE_ON_LOGOUT` | Delete browser-session conversation history when the user logs out |
+| `ENABLE_REQUESTER_TAGGING` | Set to `true` to add a per-request sanitized username tag to new requests |
+| `REQUESTER_TAG_PREFIX` | Optional prefix prepended to requester tags (for example `req-`) |
+
+Useful optional defaults for automated media adds:
+
+| Variable | Description |
+|----------|-------------|
+| `MEDIA_BOT_TAG` | Tag applied to all bot-created requests |
+| `KIDS_CONTENT_TAG` | Additional tag applied to kids requests |
+| `ENABLE_REQUESTER_TAGGING` | Enable adding a requester username tag for new requests |
+| `REQUESTER_TAG_PREFIX` | Optional prefix used for requester username tags |
+| `RADARR_MOVIE_ROOT` | Default Radarr movie root folder |
+| `RADARR_KIDS_MOVIE_ROOT` | Radarr root folder for kids movies |
+| `RADARR_DEFAULT_QUALITY_PROFILE` | Default Radarr quality profile name |
+| `RADARR_MINIMUM_AVAILABILITY` | Default Radarr minimum availability (for example `released`) |
+| `SONARR_TV_ROOT` | Default Sonarr TV root folder |
+| `SONARR_KIDS_TV_ROOT` | Sonarr root folder for kids TV |
+| `SONARR_DEFAULT_QUALITY_PROFILE` | Default Sonarr quality profile name |
+| `SONARR_SERIES_TYPE` | Default Sonarr series type (for example `standard`) |
+| `AUTO_CLASSIFY_KIDS_ENABLED` | Enable automatic kids/adults classification from metadata before prompting |
+| `OMDB_API_KEY` | Optional OMDb API key for better kids/adults classification (especially TV) |
+| `OMDB_TIMEOUT_SECONDS` | Timeout for OMDb lookups in seconds |
 
 Generate a secret key:
 
@@ -183,12 +225,28 @@ curl -X POST http://localhost:5000/chat \
 | GET | `/` | Session | Web chat UI |
 | POST | `/chat` | Session or API key | Send a message, get a response |
 | POST | `/bug-report` | Session or API key | Submit a user bug report with optional debug context |
-| GET | `/health` | None | Service health check |
-| POST | `/cache/rebuild` | Session or API key | Rebuild the credit cache |
+| GET | `/health` | None | Service health check (returns JSON status and credit-cache readiness) |
+| POST | `/cache/rebuild` | Session or API key | Rebuild the credit cache from Radarr/Sonarr |
+| GET | `/notifications` | Session or API key | Poll for pending download notifications |
+| POST | `/webhooks/radarr` | None (if `WEBHOOK_SECRET` unset) / Webhook secret | Radarr download/health event webhook |
+| POST | `/webhooks/sonarr` | None (if `WEBHOOK_SECRET` unset) / Webhook secret | Sonarr download/health event webhook |
 | GET | `/auth/login` | None | Plex login page |
 | GET | `/auth/start` | None | Initiate Plex OAuth flow |
 | GET | `/auth/callback` | None | Plex OAuth callback |
-| GET | `/auth/logout` | None | Clear session |
+| GET | `/auth/logout` | None | Clear session and optionally purge browser-session memory |
+
+## Conversation Memory Lifecycle
+
+When `CONVERSATION_MEMORY_ENABLED=true`, Media Bot stores prior `user` and `assistant` turns per identity in `memory.db` and injects a bounded transcript into later chat requests.
+
+- Browser logins use `plex_<user_id>` as the memory identity.
+- API-key clients use `api_<hashed_api_key>` as the memory identity.
+- Workflow state such as pending title picks or season selections remains separate from the stored transcript.
+- The latest user/assistant exchange is saved first and then trimmed back to `CONVERSATION_MEMORY_MAX_TURNS`, so the newest reply is retained.
+- TTL expiry is opportunistic and runs every `CONVERSATION_MEMORY_CLEANUP_INTERVAL` chat requests when `CONVERSATION_MEMORY_TTL_HOURS > 0`.
+- Setting `CONVERSATION_MEMORY_CLEANUP_INTERVAL=0` disables opportunistic cleanup.
+- Setting `CONVERSATION_MEMORY_PURGE_ON_LOGOUT=true` deletes browser-session memory during `/auth/logout`.
+- API-key memory is not affected by `/auth/logout`; it ages out by TTL or remains until explicit purge tooling is added.
 
 ## Dev and Release Environments
 
@@ -199,10 +257,56 @@ curl -X POST http://localhost:5000/chat \
 Typical workflow:
 
 1. Develop and test locally with `docker-compose.dev.yml`.
-2. Merge to `main` when ready.
-3. Create and push a version tag (for example `v1.3.0`).
-4. GitHub Actions builds and publishes `ghcr.io/lachiendupape/media-bot:v1.3.0`.
-5. Deploy from git ref/tag on host with the deploy script.
+2. Publish a versioned image with the `Release` workflow (for example `v1.3.0`).
+3. Deploy and validate in dev first (`Deploy Dev` workflow or `scripts/deploy-dev.ps1`).
+4. Manually promote to prod (`Promote To Prod` workflow) after dev checks pass.
+
+## Feedback Loop Automation
+
+Media Bot now includes a safe first-pass automation loop for user bug feedback:
+
+1. `Feedback Triage` workflow (`.github/workflows/feedback-triage.yml`)
+  - Triggers when a `type/bug` issue is opened or reopened.
+  - Applies severity and area labels from issue content.
+  - Marks incomplete reports with `triage/needs-info`.
+  - Marks low-risk reports as `autofix-candidate`.
+
+2. `Autofix Draft PR` workflow (`.github/workflows/autofix-draft-pr.yml`)
+  - Triggers when an issue receives the `autofix-candidate` label.
+  - Runs conservative auto-fix routines (for example ruff import/lint fixes).
+  - Validates changes before opening a PR.
+  - Opens a draft PR for human review (no direct merge).
+
+Repository variables for tuning auto-fix behavior:
+
+- `AUTOFIX_EXTRA_COMMAND` (optional): extra command to run for repo-specific fixes.
+- `AUTOFIX_VALIDATE_COMMAND` (optional): validation command override.
+  - Default: `ruff check . && python -m compileall -q .`
+
+Guardrails:
+
+- Auto-fix runs only on issues explicitly labeled `autofix-candidate`.
+- PRs are opened as draft and require human approval.
+- If validation fails, no PR is opened and the issue gets a status comment.
+
+## Personalized Usage Welcome
+
+When `TAUTULLI_WELCOME_ENABLED=true`, the initial chat welcome message can include
+per-user usage insights from Tautulli for the last `TAUTULLI_WELCOME_DAYS` days:
+
+- episode count
+- movie count
+- top watched shows (by episodes watched)
+
+If Tautulli is unavailable, user mapping fails, or no recent activity exists,
+the app silently falls back to the default welcome text.
+
+Phase 2A (implemented):
+
+- detect likely season completion from recent watch history
+- show an "Up next" suggestion to queue the next season (suggestion only)
+
+Enable with `TAUTULLI_PHASE2_ENABLED=true`.
 
 Release tagging example:
 
@@ -217,17 +321,33 @@ Deploy example:
 ./scripts/deploy-prod.ps1 -Ref v1.3.0
 ```
 
+Dev deploy example:
+
+```powershell
+./scripts/deploy-dev.ps1 -Ref v1.3.0
+```
+
 The deploy script maps version tags like `v1.3.0` to the matching GHCR image tag.
 For branch refs such as `main` or `master`, it deploys `latest`.
 If the GHCR pull is denied or unavailable on the host, the script automatically
 falls back to a local Docker build using the same target image tag.
 
+Promotion checklist before prod:
+
+1. `Deploy Dev` workflow succeeds for target ref/version.
+2. Dev `/health` endpoint returns `running`.
+3. Basic `/chat` smoke tests pass (including follow-up parsing like `1 please` and `season 1 please`).
+4. Run `Promote To Prod` workflow with the tested version.
+
 ## Project Structure
 
 ```
 Media_bot/
-  main.py            -- Flask server, routes, authentication
+  main.py            -- Flask server, routes, authentication, webhooks
   llm.py             -- LLM integration, tool schemas, handlers
+  notifications.py   -- Download notification tracking and delivery
+  memory.py          -- Persistent conversation memory store and TTL pruning
+  quota.py           -- Per-user daily download quota management
   plex_auth.py       -- Plex OAuth PIN-based authentication
   config.py          -- Environment variable loading and validation
   observability.py   -- Structured logging, tracing, and bug-report helpers
@@ -241,6 +361,7 @@ Media_bot/
     sonarr.py        -- Sonarr API wrapper
     lidarr.py        -- Lidarr API wrapper (status check only)
   scripts/
+    deploy-dev.ps1   -- Deploy dev stack from a git ref/tag
     deploy-prod.ps1  -- Deploy stack from a git ref/tag (GitOps-style)
     security/
       run-baseline.ps1   -- Local baseline scanner (ZAP + Nuclei)
@@ -253,6 +374,8 @@ Media_bot/
   .github/
     workflows/
       ci.yml         -- GitHub Actions lint and syntax check
+      deploy-dev.yml -- GitHub Actions dev deployment and health validation
+      promote-to-prod.yml -- GitHub Actions manual dev-first promotion to production
       release.yml    -- GitHub Actions Docker image publish on version tags
       security.yml   -- GitHub Actions scheduled/manual security scans
   requirements.txt   -- Python dependencies

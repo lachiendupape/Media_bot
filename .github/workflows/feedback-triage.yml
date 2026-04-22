@@ -1,0 +1,111 @@
+name: Feedback Triage
+
+on:
+  issues:
+    types: [opened, reopened]
+
+jobs:
+  triage-bug-report:
+    if: contains(github.event.issue.labels.*.name, 'type/bug')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Triage and label bug report
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const body = (issue.body || '').toLowerCase();
+
+            async function ensureLabel(name, color, description) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name,
+                });
+              } catch (err) {
+                if (err.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name,
+                    color,
+                    description,
+                  });
+                } else {
+                  throw err;
+                }
+              }
+            }
+
+            const requiredLabels = [
+              ['triage/needs-info', 'f9d0c4', 'Bug report is missing key reproduction details'],
+              ['severity/low', '0e8a16', 'Low severity bug'],
+              ['severity/medium', 'fbca04', 'Medium severity bug'],
+              ['severity/high', 'd93f0b', 'High severity bug'],
+              ['area/llm', '1d76db', 'LLM reasoning or response behavior'],
+              ['area/ui', '5319e7', 'Web UI behavior'],
+              ['area/auth', '0e8a16', 'Authentication/session behavior'],
+              ['area/integration', '0052cc', 'Radarr/Sonarr/Plex integration'],
+              ['autofix-candidate', 'bfdadc', 'Likely low-risk candidate for automated fix attempt'],
+            ];
+
+            for (const [name, color, description] of requiredLabels) {
+              await ensureLabel(name, color, description);
+            }
+
+            const derived = new Set(issue.labels.map((l) => l.name));
+
+            const hasSteps = body.includes('steps to reproduce') || /\b1\./.test(body);
+            const hasExpected = body.includes('expected behavior');
+            if (!hasSteps || !hasExpected) {
+              derived.add('triage/needs-info');
+            }
+
+            const mentionsProd = /\bprod(uction)?\b/.test(body);
+            const severeSignal = /(down|crash|traceback|500|security|data loss|can\'t login|cannot login)/.test(body);
+            if (mentionsProd && severeSignal) {
+              derived.add('severity/high');
+            } else if (mentionsProd) {
+              derived.add('severity/medium');
+            } else {
+              derived.add('severity/low');
+            }
+
+            if (/(llm|prompt|json leak|hallucin|tool call)/.test(body)) derived.add('area/llm');
+            if (/(ui|button|screen|chat box|banner|frontend|css)/.test(body)) derived.add('area/ui');
+            if (/(auth|login|logout|session|api key|oauth|plex)/.test(body)) derived.add('area/auth');
+            if (/(radarr|sonarr|plex|webhook|download|integration)/.test(body)) derived.add('area/integration');
+
+            const lowRiskSignal = /(typo|spelling|unused import|ruff|lint|docs|readme|markdown|formatting)/.test(body + ' ' + issue.title.toLowerCase());
+            if (lowRiskSignal) {
+              derived.add('autofix-candidate');
+            }
+
+            await github.rest.issues.setLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: Array.from(derived),
+            });
+
+            const summary = [
+              'Automated triage completed.',
+              '',
+              '- Added severity and area labels',
+              '- Marked missing report details when applicable',
+              '- Marked low-risk reports as autofix candidates',
+              '',
+              'Human review is still required before merging any fix.',
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: summary,
+            });

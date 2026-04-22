@@ -1,0 +1,103 @@
+name: Promote To Prod
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to promote to production (example: v1.4.2)"
+        required: true
+        type: string
+      run_dev_checks:
+        description: "Run dev deployment + health check before prod promotion"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  verify-dev:
+    name: Verify in development first
+    if: ${{ inputs.run_dev_checks }}
+    runs-on: self-hosted
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Deploy to dev for verification
+        shell: pwsh
+        run: |
+          ./scripts/deploy-dev.ps1 -Ref "${{ inputs.version }}"
+
+      - name: Validate dev /health
+        shell: pwsh
+        run: |
+          $resp = Invoke-WebRequest -Uri "http://127.0.0.1:5001/health" -UseBasicParsing -TimeoutSec 15
+          Write-Host $resp.Content
+
+  publish-image:
+    name: Publish release image
+    runs-on: ubuntu-latest
+    needs: [verify-dev]
+    if: ${{ always() && (!inputs.run_dev_checks || needs.verify-dev.result == 'success') }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image metadata
+        id: meta
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          VERSION_NO_V="${VERSION#v}"
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/media-bot"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version_no_v=$VERSION_NO_V" >> "$GITHUB_OUTPUT"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version_no_v }}
+            ${{ steps.meta.outputs.image }}:latest
+
+  deploy-prod:
+    name: Deploy to production
+    runs-on: self-hosted
+    needs: [publish-image]
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Deploy production stack
+        shell: pwsh
+        run: |
+          ./scripts/deploy-prod.ps1 -Ref "${{ inputs.version }}"
+
+      - name: Validate prod /health
+        shell: pwsh
+        run: |
+          $resp = Invoke-WebRequest -Uri "http://127.0.0.1:5000/health" -UseBasicParsing -TimeoutSec 15
+          Write-Host $resp.Content

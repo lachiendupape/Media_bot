@@ -81,6 +81,15 @@ def _today_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+def _normalize_media_type(media_type: str) -> str:
+    """Normalize supported media types to internal counters."""
+    if media_type == "movie":
+        return "movie"
+    if media_type in {"tv_series", "tv_season"}:
+        return "tv_series"
+    return media_type
+
+
 def _get_limit(user_id: str, media_type: str) -> int:
     """Return the effective daily download limit for *user_id* and *media_type*.
 
@@ -97,27 +106,39 @@ def _get_limit(user_id: str, media_type: str) -> int:
         finally:
             conn.close()
 
+    normalized = _normalize_media_type(media_type)
+
     if row is not None:
-        col = "daily_movie_quota" if media_type == "movie" else "daily_episode_quota"
+        col = "daily_movie_quota" if normalized == "movie" else "daily_episode_quota"
         override = row[col]
         if override is not None:
             return int(override)
 
-    if media_type == "movie":
+    if normalized == "movie":
         return config.DAILY_MOVIE_QUOTA
-    return config.DAILY_TV_SEASON_QUOTA
+    return config.DAILY_TV_SERIES_QUOTA
 
 
 def _count_today(user_id: str, media_type: str, date_utc: str) -> int:
     """Return how many downloads of *media_type* *user_id* has made today."""
+    normalized = _normalize_media_type(media_type)
+
     with _lock:
         conn = _get_connection()
         try:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM download_events "
-                "WHERE user_id = ? AND media_type = ? AND date_utc = ?",
-                (user_id, media_type, date_utc),
-            ).fetchone()
+            if normalized == "tv_series":
+                # Include legacy tv_season rows so old data still counts.
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM download_events "
+                    "WHERE user_id = ? AND media_type IN ('tv_series', 'tv_season') AND date_utc = ?",
+                    (user_id, date_utc),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM download_events "
+                    "WHERE user_id = ? AND media_type = ? AND date_utc = ?",
+                    (user_id, normalized, date_utc),
+                ).fetchone()
             return int(row[0])
         finally:
             conn.close()
@@ -129,7 +150,7 @@ def check_quota(user_id: str, username: str, media_type: str) -> tuple[bool, str
     Args:
         user_id:    Unique identifier for the user (Plex user ID or ``"api_key:<hash>"``).
         username:   Display name used in the returned message.
-        media_type: ``"movie"`` or ``"tv_season"``.
+        media_type: ``"movie"`` or ``"tv_series"``.
 
     Returns:
         ``(True, "")`` when the download is allowed.
@@ -145,8 +166,10 @@ def check_quota(user_id: str, username: str, media_type: str) -> tuple[bool, str
     today = _today_utc()
     used = _count_today(user_id, media_type, today)
 
+    normalized = _normalize_media_type(media_type)
+
     if used >= limit:
-        kind = "movie" if media_type == "movie" else "TV season"
+        kind = "movie" if normalized == "movie" else "TV series"
         return (
             False,
             f"⚠️ You've reached your daily {kind} download quota ({used}/{limit}). "
@@ -162,12 +185,13 @@ def record_download(user_id: str, username: str, media_type: str, title: str) ->
     Args:
         user_id:    Unique identifier for the user.
         username:   Display name (stored for auditing).
-        media_type: ``"movie"`` or ``"tv_season"``.
+        media_type: ``"movie"`` or ``"tv_series"``.
         title:      Human-readable title of the downloaded media.
     """
     if not config.QUOTA_ENABLED:
         return
 
+    normalized = _normalize_media_type(media_type)
     now = int(time.time())
     today = _today_utc()
     with _lock:
@@ -176,33 +200,31 @@ def record_download(user_id: str, username: str, media_type: str, title: str) ->
             conn.execute(
                 "INSERT INTO download_events (user_id, username, media_type, title, timestamp, date_utc) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (user_id, username, media_type, title, now, today),
+                (user_id, username, normalized, title, now, today),
             )
             conn.commit()
         finally:
             conn.close()
 
-    log.info(
-        "quota.record_download",
-        extra={"user_id": user_id, "username": username, "media_type": media_type, "title": title},
-    )
-
 
 def get_user_usage(user_id: str) -> dict:
     """Return today's download counts for *user_id*.
 
-    Returns a dict with keys ``movies``, ``tv_seasons``, ``movie_limit``,
-    ``tv_season_limit``, and ``date_utc``.
+    Returns a dict with keys ``movies``, ``tv_series``, ``movie_limit``,
+    ``tv_series_limit``, and ``date_utc``.
     """
     today = _today_utc()
     movies = _count_today(user_id, "movie", today)
-    tv_seasons = _count_today(user_id, "tv_season", today)
+    tv_series = _count_today(user_id, "tv_series", today)
     return {
         "date_utc": today,
         "movies": movies,
         "movie_limit": _get_limit(user_id, "movie"),
-        "tv_seasons": tv_seasons,
-        "tv_season_limit": _get_limit(user_id, "tv_season"),
+        "tv_series": tv_series,
+        "tv_series_limit": _get_limit(user_id, "tv_series"),
+        # Legacy compatibility for existing callers.
+        "tv_seasons": tv_series,
+        "tv_season_limit": _get_limit(user_id, "tv_series"),
     }
 
 
