@@ -379,3 +379,101 @@ def build_weekly_usage_message(plex_username: str) -> WelcomeData | None:
     message = _format_weekly_summary(username, history_rows)
     _cache.set(cache_key, message)
     return message
+
+def get_all_watchers_for_title(
+    title: str,
+    *,
+    season_number: int | None = None,
+    days: int = 35,
+) -> dict[str, int]:
+    """Return a mapping of Plex username → watch-count for a given title.
+
+    For movies ``season_number`` should be ``None`` and the match is on the
+    ``title`` field of Tautulli history rows (case-insensitive).
+
+    For TV seasons pass the season number; the match is on
+    ``grandparent_title`` + ``parent_media_index``.  The count represents the
+    number of **distinct episodes** watched per user.
+
+    Returns an empty dict when Tautulli is unavailable or the title has not
+    been watched at all.  Failures are logged but not raised.
+    """
+    if not config.TAUTULLI_URL or not config.TAUTULLI_API_KEY:
+        return {}
+
+    cutoff = int(time.time()) - max(1, days) * 86400
+
+    # Resolve all Tautulli user IDs so we can label results by username.
+    users_data = _call_tautulli('get_users')
+    if not users_data:
+        return {}
+    user_rows = users_data if isinstance(users_data, list) else users_data.get('data', [])
+    id_to_name: dict[str, str] = {}
+    for u in user_rows:
+        if not isinstance(u, dict):
+            continue
+        uid = str(u.get('user_id', '')).strip()
+        uname = str(u.get('friendly_name') or u.get('username') or uid).strip()
+        if uid:
+            id_to_name[uid] = uname
+
+    title_lower = (title or '').strip().lower()
+    is_tv = season_number is not None
+
+    watchers: dict[str, set] = {}
+
+    for uid, uname in id_to_name.items():
+        page_len = 500
+        start_pos = 0
+
+        while True:
+            history = _call_tautulli('get_history', user_id=uid, length=page_len, start=start_pos, start_date=cutoff)
+            if not history:
+                break
+            rows = history if isinstance(history, list) else history.get('data', [])
+            if not isinstance(rows, list) or not rows:
+                break
+
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    watched_at = int(row.get('date') or 0)
+                except (TypeError, ValueError):
+                    watched_at = 0
+                if watched_at < cutoff:
+                    continue
+
+                media_type = str(row.get('media_type', '')).lower()
+
+                if not is_tv:
+                    # Movie: match on title field
+                    if media_type != 'movie':
+                        continue
+                    row_title = str(row.get('title') or '').strip().lower()
+                    if row_title != title_lower:
+                        continue
+                    watchers.setdefault(uname, set()).add('movie')
+                else:
+                    # Episode: match on show title + season number
+                    if media_type != 'episode':
+                        continue
+                    show_name = (
+                        str(row.get('grandparent_title') or '').strip()
+                        or str(row.get('parent_title') or '').strip()
+                        or str(row.get('title') or '').strip()
+                    ).lower()
+                    if show_name != title_lower:
+                        continue
+                    row_season = _to_positive_int(row.get('parent_media_index'))
+                    if row_season != season_number:
+                        continue
+                    ep_num = _to_positive_int(row.get('media_index'))
+                    key = ep_num if ep_num is not None else object()
+                    watchers.setdefault(uname, set()).add(key)
+
+            if len(rows) < page_len:
+                break
+            start_pos += page_len
+
+    return {uname: len(ep_set) for uname, ep_set in watchers.items()}

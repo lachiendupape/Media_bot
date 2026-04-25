@@ -118,6 +118,12 @@ At minimum you need to set:
 | `CONVERSATION_MEMORY_PURGE_ON_LOGOUT` | Delete browser-session conversation history when the user logs out |
 | `ENABLE_REQUESTER_TAGGING` | Set to `true` to add a per-request sanitized username tag to new requests |
 | `REQUESTER_TAG_PREFIX` | Optional prefix prepended to requester tags (for example `req-`) |
+| `CLEANUP_ENABLED` | Set to `true` to activate watch-based auto-cleanup (default `false`) |
+| `CLEANUP_CHECK_INTERVAL_DAYS` | Days between cleanup re-checks per item (default `7`) |
+| `CLEANUP_MAX_AGE_DAYS` | Hard-delete content after this many days regardless of watch status (default `28`) |
+| `CLEANUP_SCHEDULE_HOUR` | UTC hour the cleanup job runs daily (default `3`) |
+| `CLEANUP_BACKLOG_WARN_DAYS` | Warn at download time if the user has unwatched items older than this (default `3`) |
+| `CLEANUP_MIN_WATCHED_EPISODES` | Minimum episodes watched in a season to count as "watched" (default `1`) |
 
 Useful optional defaults for automated media adds:
 
