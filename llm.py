@@ -621,8 +621,21 @@ def add_radarr_movie_handler(
         )
 
     final_kids = bool(resolved_kids) if resolved_kids is not None else False
-    result_msg = _do_add_radarr_movie(radarr, selected_movie, is_kids=final_kids, user_id=user_id, username=username)
-    if _backlog_warn and result_msg.startswith("Great news!"):
+    add_result = _do_add_radarr_movie(
+        radarr,
+        selected_movie,
+        is_kids=final_kids,
+        user_id=user_id,
+        username=username,
+    )
+    if isinstance(add_result, tuple) and len(add_result) == 2:
+        add_ok, result_msg = add_result
+    else:
+        # Backward-compatible fallback for legacy string-only returns.
+        result_msg = add_result
+        add_ok = isinstance(result_msg, str) and result_msg.startswith("Great news!")
+
+    if _backlog_warn and add_ok:
         return f"{_backlog_warn}\n\n{result_msg}"
     return result_msg
 
