@@ -19,7 +19,6 @@ A natural-language media library assistant that lets you search and manage your 
 - **User bug reports** -- the chat UI can send issue reports with request IDs and optional debug context.
 - **GitHub issue creation** -- bug reports can optionally create a GitHub issue when a repo and token are configured.
 - **Download notifications** -- tracks who requested each download and delivers completion or failure notifications via in-chat banners and a polling endpoint. Radarr/Sonarr webhooks route events back to the requesting user.
-- **Speaking styles** -- change how the bot responds with commands like "speak like a pirate", "robot mode", or "reset style". Supported styles: pirate, robot, sarcastic, shakespearean, enthusiastic.
 - **Structured observability** -- JSON logs, request correlation IDs, optional Sentry errors, and optional OpenTelemetry traces.
 - **Plex OAuth login** -- browser-based sign-in using your Plex account; only users with access to your server can use the bot.
 - **API key access** -- programmatic access via `X-Api-Key` header for scripts and automation.
