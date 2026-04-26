@@ -10,7 +10,10 @@ from api.sonarr import SonarrAPI
 import config
 import notifications
 import quota
+from cleanup import CleanupDB
 from observability import redact_sensitive_fields, start_span
+
+_cleanup_db = CleanupDB()
 
 log = logging.getLogger(__name__)
 
@@ -447,6 +450,25 @@ def _user_identity(user_info: dict | None) -> tuple[str, str]:
     return 'api_key', 'api_key'
 
 
+def _backlog_warning(user_id: str) -> str | None:
+    """Return a warning message if the user has unwatched content older than
+    CLEANUP_BACKLOG_WARN_DAYS, or None when the feature is disabled or the
+    backlog is empty."""
+    if not config.CLEANUP_ENABLED:
+        return None
+    try:
+        titles = _cleanup_db.get_unwatched_backlog_titles(user_id)
+    except Exception:
+        log.debug("cleanup.backlog_check_error user_id=%r", user_id)
+        return None
+    if not titles:
+        return None
+    if len(titles) == 1:
+        return f"Just a heads-up — you still haven't watched **{titles[0]}** that you added earlier."
+    listed = ", ".join(f"**{t}**" for t in titles[:-1]) + f" and **{titles[-1]}**"
+    return f"Just a heads-up — you haven't watched {listed} yet from your earlier requests."
+
+
 def _requester_tag_from_username(username: str | None) -> str | None:
     """Build a safe requester tag from username when requester tagging is enabled."""
     if not config.ENABLE_REQUESTER_TAGGING:
@@ -504,9 +526,21 @@ def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: boo
             notifications.record_pending_download(user_id, username, selected_movie['title'], "movie")
         except Exception:
             log.warning("Failed to record pending download notification for movie")
-        return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now — it'll be with you shortly!"
+        try:
+            arr_id = result.get('id') if isinstance(result, dict) else None
+            if arr_id and config.CLEANUP_ENABLED:
+                _cleanup_db.record_addition(
+                    media_type="movie",
+                    arr_id=arr_id,
+                    title=selected_movie['title'],
+                    requester_username=username,
+                    requester_plex_id=user_id,
+                )
+        except Exception:
+            log.warning("Failed to record cleanup tracking entry for movie")
+        return f"Great news! '{selected_movie['title']} ({selected_movie.get('year', '')})' has been grabbed and is downloading now \u2014 it'll be with you shortly!"
     if error == 'already_exists':
-        return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library — no need to add it again!"
+        return f"'{selected_movie['title']} ({selected_movie.get('year', '')})' is already in your library \u2014 no need to add it again!"
     return f"Failed to add movie '{selected_movie['title']}': {error}"
 
 
@@ -526,6 +560,8 @@ def add_radarr_movie_handler(
     allowed, quota_msg = quota.check_quota(user_id, username, "movie")
     if not allowed:
         return quota_msg
+
+    _backlog_warn = _backlog_warning(user_id)
 
     initial_kids_preference = _initial_kids_preference(title, is_kids)
     radarr = RadarrAPI()
@@ -585,7 +621,23 @@ def add_radarr_movie_handler(
         )
 
     final_kids = bool(resolved_kids) if resolved_kids is not None else False
-    return _do_add_radarr_movie(radarr, selected_movie, is_kids=final_kids, user_id=user_id, username=username)
+    add_result = _do_add_radarr_movie(
+        radarr,
+        selected_movie,
+        is_kids=final_kids,
+        user_id=user_id,
+        username=username,
+    )
+    if isinstance(add_result, tuple) and len(add_result) == 2:
+        add_ok, result_msg = add_result
+    else:
+        # Backward-compatible fallback for legacy string-only returns.
+        result_msg = add_result
+        add_ok = isinstance(result_msg, str) and result_msg.startswith("Great news!")
+
+    if _backlog_warn and add_ok:
+        return f"{_backlog_warn}\n\n{result_msg}"
+    return result_msg
 
 def add_sonarr_series_handler(
     title: str,
@@ -604,6 +656,8 @@ def add_sonarr_series_handler(
     allowed, quota_msg = quota.check_quota(user_id, username, "tv_series")
     if not allowed:
         return quota_msg
+
+    _backlog_warn = _backlog_warning(user_id)
 
     initial_kids_preference = _initial_kids_preference(title, is_kids)
     sonarr = SonarrAPI()
@@ -725,7 +779,23 @@ def add_sonarr_series_handler(
             notifications.record_pending_download(user_id, username, selected_series['title'], "tv_season")
         except Exception:
             log.warning("Failed to record pending download notification for series")
-        return f"Great news! '{selected_series['title']}' Season {season} has been grabbed and is downloading now — it'll be with you shortly!"
+        try:
+            arr_id = result.get('id') if isinstance(result, dict) else None
+            if arr_id and config.CLEANUP_ENABLED:
+                _cleanup_db.record_addition(
+                    media_type="series_season",
+                    arr_id=arr_id,
+                    title=selected_series['title'],
+                    requester_username=username,
+                    requester_plex_id=user_id,
+                    season_number=season,
+                )
+        except Exception:
+            log.warning("Failed to record cleanup tracking entry for series")
+        success_msg = f"Great news! '{selected_series['title']}' Season {season} has been grabbed and is downloading now — it'll be with you shortly!"
+        if _backlog_warn:
+            return f"{_backlog_warn}\n\n{success_msg}"
+        return success_msg
     if error == 'already_exists':
         # Series exists in library — check if the requested season is already monitored
         tvdb_id = selected_series.get('tvdbId')
@@ -748,10 +818,25 @@ def add_sonarr_series_handler(
                     notifications.record_pending_download(user_id, username, existing['title'], "tv_season")
                 except Exception:
                     log.warning("Failed to record pending download notification for series")
-                return (
+                try:
+                    if config.CLEANUP_ENABLED:
+                        _cleanup_db.record_addition(
+                            media_type="series_season",
+                            arr_id=existing['id'],
+                            title=existing['title'],
+                            requester_username=username,
+                            requester_plex_id=user_id,
+                            season_number=season,
+                        )
+                except Exception:
+                    log.warning("Failed to record cleanup tracking entry for series (update path)")
+                update_msg = (
                     f"Great news! '{existing['title']}' Season {season} has been grabbed "
                     f"and is downloading now — it'll be with you shortly!"
                 )
+                if _backlog_warn:
+                    return f"{_backlog_warn}\n\n{update_msg}"
+                return update_msg
             return f"Failed to update '{selected_series['title']}': {update_error}"
         return f"'{selected_series['title']} ({selected_series.get('year', '')})' is already in your library — no need to add it again!"
     return f"Failed to add TV series '{selected_series['title']}': {error}"

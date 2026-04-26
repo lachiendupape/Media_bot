@@ -282,19 +282,13 @@
     </header>
     <div class="notification-banner" id="notificationBanner" aria-live="polite" aria-label="Download notifications"></div>
     <div class="chat-area" id="chatArea">
-        <div class="msg bot">Hi {{ user.username }}! I’m here to help with your <strong>{{ plex_server_name or 'Plex' }} library</strong>.
+        <div class="msg bot" id="welcomeMsg"><span id="greetingText">Hi</span> {{ user.username }}! I'm here to help with your <strong>{{ plex_server_name or 'Plex' }} library</strong>.
 
 {% if usage_summary %}{{ usage_summary }}
 
 {% endif %}
 
-You can ask me to find cast or directors, add movies or TV, clean up media if you’re the owner, or suggest something similar to a title you already have.
-
-I can also switch up how I reply. Try something like "speak like a pirate" or "reset style".
-
-If you want the full list, just say <strong>help</strong> or <strong>what can you do</strong>.
-
-I’m only working with your own library and connected services, not the wider internet.</div>{% if next_season_suggestions %}
+Ask me to add movies or TV, check downloads, look up cast and directors, or find similar titles. Say <strong>help</strong> for the full list.{% if next_season_suggestions %} I've also spotted a few shows you might want to continue — quick-add buttons are below.{% endif %}</div>{% if next_season_suggestions %}
         <div class="quick-action-row">
 {% for s in next_season_suggestions %}
           <button class="quick-action-btn" onclick="sendMessage('Add {{ s.show }} Season {{ s.next_season }}')" type="button">▶ Queue {{ s.show }} Season {{ s.next_season }}</button>
@@ -328,6 +322,16 @@ I’m only working with your own library and connected services, not the wider i
         </div>
     </div>
     <script>
+        // Personalise the welcome greeting based on time of day and Tautulli data
+        (function() {
+            const greetingEl = document.getElementById('greetingText');
+            if (!greetingEl) return;
+            const hour = new Date().getHours();
+            const timeGreeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+            const hasUsage = {{ 'true' if usage_summary else 'false' }};
+            greetingEl.textContent = hasUsage ? timeGreeting + ', welcome back' : timeGreeting;
+        })();
+
         const chatArea = document.getElementById('chatArea');
         const input = document.getElementById('msgInput');
         const btn = document.getElementById('sendBtn');

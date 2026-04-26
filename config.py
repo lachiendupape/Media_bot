@@ -102,6 +102,19 @@ CONVERSATION_MEMORY_CLEANUP_INTERVAL = int(os.getenv("CONVERSATION_MEMORY_CLEANU
 # Purge stored browser-session conversation history on logout.
 CONVERSATION_MEMORY_PURGE_ON_LOGOUT = os.getenv("CONVERSATION_MEMORY_PURGE_ON_LOGOUT", "true").lower() in ("1", "true", "yes")
 
+# Watch-based cleanup
+CLEANUP_ENABLED = os.getenv("CLEANUP_ENABLED", "false").lower() in ("1", "true", "yes")
+# How many days between re-checks for unwatched content (also the first-check window)
+CLEANUP_CHECK_INTERVAL_DAYS = int(os.getenv("CLEANUP_CHECK_INTERVAL_DAYS", "7"))
+# Hard-delete content after this many days regardless of watch status
+CLEANUP_MAX_AGE_DAYS = int(os.getenv("CLEANUP_MAX_AGE_DAYS", "28"))
+# Hour of day (UTC, 0-23) at which the cleanup job runs
+CLEANUP_SCHEDULE_HOUR = int(os.getenv("CLEANUP_SCHEDULE_HOUR", "3"))
+# Warn the user at download time if they have unwatched content older than this many days
+CLEANUP_BACKLOG_WARN_DAYS = int(os.getenv("CLEANUP_BACKLOG_WARN_DAYS", "3"))
+# Minimum distinct episodes watched in a season for it to count as "watched"
+CLEANUP_MIN_WATCHED_EPISODES = int(os.getenv("CLEANUP_MIN_WATCHED_EPISODES", "1"))
+
 # Flask
 FLASK_SECRET_KEY = os.getenv("FLASK_SECRET_KEY")
 if not FLASK_SECRET_KEY or len(FLASK_SECRET_KEY) < 16:

@@ -22,6 +22,8 @@ import tautulli_usage
 import plex_auth
 import config
 import memory
+from cleanup import CleanupDB
+_cleanup_db = CleanupDB()
 from observability import (
     append_jsonl,
     clear_request_id,
@@ -501,6 +503,17 @@ def chat():
                 notifications.mark_delivered([n['id'] for n in pending])
                 notification_lines = [n['message'] for n in pending]
                 response_text = "\n".join(notification_lines) + "\n\n" + response_text
+
+        # Deliver any pending cleanup (auto-deletion) notices
+        if user_id and config.CLEANUP_ENABLED:
+            try:
+                cleanup_notices = _cleanup_db.get_undelivered_notifications(user_id)
+                if cleanup_notices:
+                    _cleanup_db.mark_notifications_delivered(user_id)
+                    cleanup_lines = [n['message'] for n in cleanup_notices]
+                    response_text = "\n".join(cleanup_lines) + "\n\n" + response_text
+            except Exception:
+                log.exception('cleanup.notification_delivery_error')
 
         session['last_request_id'] = g.request_id
         _remember_request_context(g.request_id, {

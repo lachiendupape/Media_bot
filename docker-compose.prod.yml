@@ -24,5 +24,31 @@ services:
       retries: 3
       start_period: 15s
 
+  media-bot-cleanup:
+    # ⚠️ CRITICAL WARNING: 
+    # Do not deploy this service until a new container image build/release has been cut
+    # that includes the `apscheduler` package. Applying this stack before the image is
+    # updated in GHCR will cause this sidecar container to immediately crash with a ModuleNotFoundError.
+    image: ghcr.io/lachiendupape/media-bot:${MEDIA_BOT_VERSION:-latest}
+    container_name: media-bot-cleanup
+    restart: unless-stopped
+    command: ["python", "cleanup_service.py"]
+    env_file:
+      - .env
+    environment:
+      - FLASK_ENV=production
+      - APP_VERSION=${MEDIA_BOT_VERSION:-latest}
+      - DATA_DIR=/app/data
+      - CLEANUP_ENABLED=${CLEANUP_ENABLED:-false}
+      - CLEANUP_CHECK_INTERVAL_DAYS=${CLEANUP_CHECK_INTERVAL_DAYS:-7}
+      - CLEANUP_MAX_AGE_DAYS=${CLEANUP_MAX_AGE_DAYS:-28}
+      - CLEANUP_SCHEDULE_HOUR=${CLEANUP_SCHEDULE_HOUR:-3}
+      - CLEANUP_BACKLOG_WARN_DAYS=${CLEANUP_BACKLOG_WARN_DAYS:-3}
+      - CLEANUP_MIN_WATCHED_EPISODES=${CLEANUP_MIN_WATCHED_EPISODES:-1}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - cache-data:/app/data
+
 volumes:
   cache-data:

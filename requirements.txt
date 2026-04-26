@@ -5,3 +5,4 @@ openai>=2.30,<3
 sentry-sdk[flask]>=2.14,<3
 opentelemetry-sdk>=1.28,<2
 opentelemetry-exporter-otlp>=1.28,<2
+apscheduler>=3.10,<4
