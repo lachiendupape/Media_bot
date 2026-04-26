@@ -513,7 +513,7 @@ def chat():
                     cleanup_lines = [n['message'] for n in cleanup_notices]
                     response_text = "\n".join(cleanup_lines) + "\n\n" + response_text
             except Exception:
-                log.warning('cleanup.notification_delivery_error')
+                log.exception('cleanup.notification_delivery_error')
 
         session['last_request_id'] = g.request_id
         _remember_request_context(g.request_id, {
