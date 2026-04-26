@@ -209,17 +209,6 @@
             color: #c9d2de;
             border: 1px solid #38506a;
         }
-        .style-badge {
-            display: none;
-            padding: 4px 10px;
-            border-radius: 12px;
-            background: #0f3460;
-            border: 1px solid #e5a00d;
-            color: #e5a00d;
-            font-size: 12px;
-            font-weight: 600;
-        }
-        .style-badge.visible { display: inline-block; }
         .report-status {
             margin-top: 12px;
             font-size: 13px;
@@ -273,7 +262,6 @@
             {% if user.thumb %}<img src="{{ user.thumb }}" alt="">{% endif %}
             <span class="username">{{ user.username }}</span>
             <div class="header-actions">
-                <span class="style-badge" id="styleBadge"></span>
                 <button class="header-btn" id="reportBugBtn" type="button">Report issue</button>
                 <span class="request-meta">Version {{ app_version }}</span>
                 <a href="/auth/logout">Sign out</a>
@@ -335,7 +323,6 @@ Ask me to add movies or TV, check downloads, look up cast and directors, or find
         const chatArea = document.getElementById('chatArea');
         const input = document.getElementById('msgInput');
         const btn = document.getElementById('sendBtn');
-        const styleBadge = document.getElementById('styleBadge');
         const reportBugBtn = document.getElementById('reportBugBtn');
         const bugModal = document.getElementById('bugModal');
         const cancelBugBtn = document.getElementById('cancelBugBtn');
@@ -441,16 +428,6 @@ Ask me to add movies or TV, check downloads, look up cast and directors, or find
             }
         }
 
-        function updateStyleBadge(style) {
-            if (style) {
-                styleBadge.textContent = '🎭 ' + style.charAt(0).toUpperCase() + style.slice(1);
-                styleBadge.classList.add('visible');
-            } else {
-                styleBadge.textContent = '';
-                styleBadge.classList.remove('visible');
-            }
-        }
-
         async function send() {
             const text = input.value.trim();
             if (!text) return;
@@ -492,9 +469,6 @@ Ask me to add movies or TV, check downloads, look up cast and directors, or find
                         response: data.response,
                         version: data.version || lastInteraction.version,
                     };
-                    if ('speaking_style' in data) {
-                        updateStyleBadge(data.speaking_style);
-                    }
                 }
             } catch (e) {
                 typing.remove();

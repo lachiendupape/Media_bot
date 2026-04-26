@@ -539,7 +539,7 @@ def chat():
         
         _maybe_cleanup_conversation_memory()
         
-        return jsonify({"response": response_text, "request_id": g.request_id, "version": config.APP_VERSION, "speaking_style": chat_state.get('speaking_style')})
+        return jsonify({"response": response_text, "request_id": g.request_id, "version": config.APP_VERSION})
     except Exception:
         log.exception("Error processing chat request")
         return jsonify({"error": "Something went wrong. Please try again.", "request_id": g.request_id}), 500
