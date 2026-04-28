@@ -110,7 +110,7 @@ At minimum you need to set:
 | `QUOTA_ENABLED` | Set to `true` to enforce per-user daily download limits |
 | `DAILY_MOVIE_QUOTA` | Max movie downloads per user per day (0 = unlimited) |
 | `DAILY_TV_SERIES_QUOTA` | Max TV series downloads per user per day (0 = unlimited) |
-| `CONVERSATION_MEMORY_ENABLED` | Enable persistent multi-turn chat history across requests (default `false`) |
+| `CONVERSATION_MEMORY_ENABLED` | Enable persistent multi-turn chat history across requests (default `true`) |
 | `CONVERSATION_MEMORY_MAX_TURNS` | Maximum stored turns retained per identity |
 | `CONVERSATION_MEMORY_TTL_HOURS` | Expire stored turns after this many hours (`0` disables TTL) |
 | `CONVERSATION_MEMORY_CLEANUP_INTERVAL` | Run TTL cleanup every N chat requests (`0` disables opportunistic cleanup) |
@@ -242,7 +242,7 @@ curl -X POST http://localhost:5000/chat \
 
 ## Conversation Memory Lifecycle
 
-When `CONVERSATION_MEMORY_ENABLED=true`, Media Bot stores prior `user` and `assistant` turns per identity in `memory.db` and injects a bounded transcript into later chat requests.
+Conversation memory is **enabled by default**. Media Bot stores prior `user` and `assistant` turns per identity in `memory.db` and injects a bounded transcript into later chat requests. Set `CONVERSATION_MEMORY_ENABLED=false` to disable it.
 
 - Browser logins use `plex_<user_id>` as the memory identity.
 - API-key clients use `api_<hashed_api_key>` as the memory identity.
