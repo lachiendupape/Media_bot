@@ -110,7 +110,7 @@ At minimum you need to set:
 | `QUOTA_ENABLED` | Set to `true` to enforce per-user daily download limits |
 | `DAILY_MOVIE_QUOTA` | Max movie downloads per user per day (0 = unlimited) |
 | `DAILY_TV_SERIES_QUOTA` | Max TV series downloads per user per day (0 = unlimited) |
-| `CONVERSATION_MEMORY_ENABLED` | Enable persistent multi-turn chat history across requests (default `false`) |
+| `CONVERSATION_MEMORY_ENABLED` | Enable persistent multi-turn chat history across requests (default `true`) |
 | `CONVERSATION_MEMORY_MAX_TURNS` | Maximum stored turns retained per identity |
 | `CONVERSATION_MEMORY_TTL_HOURS` | Expire stored turns after this many hours (`0` disables TTL) |
 | `CONVERSATION_MEMORY_CLEANUP_INTERVAL` | Run TTL cleanup every N chat requests (`0` disables opportunistic cleanup) |
