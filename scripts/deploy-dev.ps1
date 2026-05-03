@@ -1,9 +1,14 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string]$Ref = "main"
+    [string]$Ref = "master"
 )
 
 $ErrorActionPreference = "Stop"
+
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+
+Push-Location $RepoRoot
+try {
 
 function Invoke-CheckedCommand {
     param(
@@ -40,3 +45,7 @@ Invoke-CheckedCommand -Command {
 } -FailureMessage "DEV health check failed"
 
 Write-Host "DEV deploy complete"
+}
+finally {
+    Pop-Location
+}
