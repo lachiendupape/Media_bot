@@ -1,9 +1,14 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string]$Ref = "main"
+    [string]$Ref = "master"
 )
 
 $ErrorActionPreference = "Stop"
+
+$RepoRoot = Split-Path -Parent $PSScriptRoot
+
+Push-Location $RepoRoot
+try {
 
 function Invoke-CheckedCommand {
     param(
@@ -45,3 +50,7 @@ if ($LASTEXITCODE -ne 0) {
 Invoke-CheckedCommand -Command { docker compose -f docker-compose.prod.yml up -d } -FailureMessage "docker compose up failed"
 
 Invoke-CheckedCommand -Command { docker compose -f docker-compose.prod.yml ps } -FailureMessage "docker compose ps failed"
+}
+finally {
+    Pop-Location
+}

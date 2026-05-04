@@ -91,7 +91,7 @@ if _FLASK_ENV == "production" and not WEBHOOK_SECRET:
         "This prevents unsigned public webhook requests."
     )
 
-# Conversation memory (Phase 1 rollout)
+# Conversation memory
 CONVERSATION_MEMORY_ENABLED = os.getenv("CONVERSATION_MEMORY_ENABLED", "true").lower() in ("1", "true", "yes")
 # Maximum number of turns (user + assistant pairs) to retain per identity
 CONVERSATION_MEMORY_MAX_TURNS = int(os.getenv("CONVERSATION_MEMORY_MAX_TURNS", "20"))

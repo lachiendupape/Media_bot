@@ -242,7 +242,7 @@ curl -X POST http://localhost:5000/chat \
 
 ## Conversation Memory Lifecycle
 
-When `CONVERSATION_MEMORY_ENABLED=true`, Media Bot stores prior `user` and `assistant` turns per identity in `memory.db` and injects a bounded transcript into later chat requests.
+Conversation memory is **enabled by default**. Media Bot stores prior `user` and `assistant` turns per identity in `memory.db` and injects a bounded transcript into later chat requests. Set `CONVERSATION_MEMORY_ENABLED=false` to disable it.
 
 - Browser logins use `plex_<user_id>` as the memory identity.
 - API-key clients use `api_<hashed_api_key>` as the memory identity.
