@@ -1,6 +1,6 @@
 services:
   media-bot:
-    image: ghcr.io/lachiendupape/media-bot:${MEDIA_BOT_VERSION:-latest}
+    image: ghcr.io/lachiendupape/media-bot:${MEDIA_BOT_VERSION:-v1.7.1}
     container_name: media-bot
     restart: unless-stopped
     ports:
@@ -9,7 +9,7 @@ services:
       - .env
     environment:
       - FLASK_ENV=production
-      - APP_VERSION=${MEDIA_BOT_VERSION:-latest}
+      - APP_VERSION=${MEDIA_BOT_VERSION:-v1.7.1}
       - OLLAMA_BASE_URL=http://host.docker.internal:11434
       - OLLAMA_MODEL=${PROD_OLLAMA_MODEL:-qwen2.5:7b}
       - DATA_DIR=/app/data
@@ -29,7 +29,7 @@ services:
     # Do not deploy this service until a new container image build/release has been cut
     # that includes the `apscheduler` package. Applying this stack before the image is
     # updated in GHCR will cause this sidecar container to immediately crash with a ModuleNotFoundError.
-    image: ghcr.io/lachiendupape/media-bot:${MEDIA_BOT_VERSION:-latest}
+    image: ghcr.io/lachiendupape/media-bot:${MEDIA_BOT_VERSION:-v1.7.1}
     container_name: media-bot-cleanup
     restart: unless-stopped
     command: ["python", "cleanup_service.py"]
@@ -37,7 +37,7 @@ services:
       - .env
     environment:
       - FLASK_ENV=production
-      - APP_VERSION=${MEDIA_BOT_VERSION:-latest}
+      - APP_VERSION=${MEDIA_BOT_VERSION:-v1.7.1}
       - DATA_DIR=/app/data
       - CLEANUP_ENABLED=${CLEANUP_ENABLED:-false}
       - CLEANUP_CHECK_INTERVAL_DAYS=${CLEANUP_CHECK_INTERVAL_DAYS:-7}
