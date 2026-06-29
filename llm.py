@@ -626,13 +626,17 @@ def add_radarr_movie_handler(
         selected_movie = next((m for m in movies if m.get('year') == preferred_year), None)
 
     if selected_movie is None and lookup_term:
+        comparison_terms = _movie_lookup_terms(lookup_term)
         exact_title_matches = [
-            m for m in movies
-            if str(m.get('title', '')).strip().casefold() == lookup_term.strip().casefold()
+            m
+            for m in movies
+            if any(
+                str(m.get('title', '')).strip().casefold() == t.strip().casefold()
+                for t in comparison_terms
+            )
         ]
         if len(exact_title_matches) == 1:
             selected_movie = exact_title_matches[0]
-
     if selected_movie is None and len(movies) > 1 and preferred_tmdb_id is None:
         options = movies[:10]
         if state is not None:
