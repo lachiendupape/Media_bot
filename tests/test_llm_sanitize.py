@@ -192,3 +192,48 @@ def test_rule_based_route_handles_title_plus_download_status_query(monkeypatch):
 
     assert result == expected
     assert telemetry["heuristic_route"] == "check_download_status"
+
+
+def test_add_radarr_movie_handler_retries_with_trimmed_year_phrase(monkeypatch):
+    class FakeRadarr:
+        def __init__(self):
+            self.calls = []
+
+        def lookup_movie(self, term):
+            self.calls.append(term)
+            if term == "the invite":
+                return [{"title": "The Invite", "year": 2026, "tmdbId": 101}]
+            return []
+
+    fake_radarr = FakeRadarr()
+
+    monkeypatch.setattr(llm, "RadarrAPI", lambda: fake_radarr)
+    monkeypatch.setattr(llm, "_check_disk_space", lambda: (True, ""))
+    monkeypatch.setattr(llm.quota, "check_quota", lambda *_args, **_kwargs: (True, ""))
+    monkeypatch.setattr(llm, "_user_identity", lambda _ui: ("u1", "alice"))
+    monkeypatch.setattr(llm, "_backlog_warning", lambda _uid: None)
+    monkeypatch.setattr(llm, "_initial_kids_preference", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(llm, "_resolve_kids_classification", lambda **_kwargs: False)
+    monkeypatch.setattr(llm, "_do_add_radarr_movie", lambda *_args, **_kwargs: (True, "added"))
+
+    result = llm.add_radarr_movie_handler("the invite from this year")
+
+    assert result == "added"
+    assert fake_radarr.calls == ["the invite from this year", "the invite"]
+
+
+def test_add_radarr_movie_handler_not_found_uses_original_query_in_message(monkeypatch):
+    class FakeRadarr:
+        def lookup_movie(self, _term):
+            return []
+
+    monkeypatch.setattr(llm, "RadarrAPI", lambda: FakeRadarr())
+    monkeypatch.setattr(llm, "_check_disk_space", lambda: (True, ""))
+    monkeypatch.setattr(llm.quota, "check_quota", lambda *_args, **_kwargs: (True, ""))
+    monkeypatch.setattr(llm, "_user_identity", lambda _ui: ("u1", "alice"))
+    monkeypatch.setattr(llm, "_backlog_warning", lambda _uid: None)
+    monkeypatch.setattr(llm, "_initial_kids_preference", lambda *_args, **_kwargs: False)
+
+    result = llm.add_radarr_movie_handler("the invite from this year")
+
+    assert result == "Could not find any movies matching 'the invite from this year'."
