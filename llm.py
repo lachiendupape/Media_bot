@@ -544,6 +544,49 @@ def _do_add_radarr_movie(radarr: "RadarrAPI", selected_movie: dict, is_kids: boo
     return f"Failed to add movie '{selected_movie['title']}': {error}"
 
 
+def _movie_lookup_terms(title: str) -> list[str]:
+    """Build ordered fallback search terms for Radarr movie lookups."""
+    raw = (title or "").strip()
+    if not raw:
+        return []
+
+    terms: list[str] = []
+
+    def _add(term: str):
+        candidate = (term or "").strip().rstrip('?.! ')
+        if candidate and all(candidate.casefold() != existing.casefold() for existing in terms):
+            terms.append(candidate)
+
+    _add(raw)
+
+    normalized = re.sub(
+        r'^(the\s+)?(movie|film|show|tv show|tv series|series)\s+',
+        '',
+        raw,
+        flags=re.IGNORECASE,
+    ).strip()
+    _add(normalized)
+
+    trimmed = normalized
+    trimmed = re.sub(r'\b(from|in)\s+this\s+year\b', '', trimmed, flags=re.IGNORECASE)
+    trimmed = re.sub(r'\b(this|current)\s+year\b', '', trimmed, flags=re.IGNORECASE)
+    trimmed = re.sub(r'\b(from|in)\s+(last|previous)\s+year\b', '', trimmed, flags=re.IGNORECASE)
+    trimmed = re.sub(r'\s{2,}', ' ', trimmed).strip()
+    _add(trimmed)
+
+    for quoted in re.findall(r'["\']([^"\']{2,})["\']', raw):
+        quoted_clean = quoted.strip().rstrip('?.! ')
+        quoted_clean = re.sub(
+            r'^(the\s+)?(movie|film|show|tv show|tv series|series)\s+',
+            '',
+            quoted_clean,
+            flags=re.IGNORECASE,
+        ).strip()
+        _add(quoted_clean)
+
+    return terms
+
+
 def add_radarr_movie_handler(
     title: str,
     state: dict = None,
@@ -565,7 +608,14 @@ def add_radarr_movie_handler(
 
     initial_kids_preference = _initial_kids_preference(title, is_kids)
     radarr = RadarrAPI()
-    movies = radarr.lookup_movie(title)
+    movies = []
+    lookup_term = title
+    for term in _movie_lookup_terms(title):
+        result = radarr.lookup_movie(term)
+        if result:
+            movies = result
+            lookup_term = term
+            break
     if not movies:
         return f"Could not find any movies matching '{title}'."
 
@@ -574,6 +624,14 @@ def add_radarr_movie_handler(
         selected_movie = next((m for m in movies if m.get('tmdbId') == preferred_tmdb_id), None)
     elif preferred_year is not None:
         selected_movie = next((m for m in movies if m.get('year') == preferred_year), None)
+
+    if selected_movie is None and lookup_term:
+        exact_title_matches = [
+            m for m in movies
+            if str(m.get('title', '')).strip().casefold() == lookup_term.strip().casefold()
+        ]
+        if len(exact_title_matches) == 1:
+            selected_movie = exact_title_matches[0]
 
     if selected_movie is None and len(movies) > 1 and preferred_tmdb_id is None:
         options = movies[:10]
